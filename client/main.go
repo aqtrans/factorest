@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"factorest/types"
 	"flag"
 	"fmt"
 	"io"
@@ -16,37 +17,8 @@ import (
 	"time"
 )
 
-// Config holds all configuration loaded from config.toml
-// Struct field names must be exported (capitalized) for TOML unmarshaling to work
-type Config struct {
-	PasswordFile string         `toml:"pwfile"`
-	Repository   string         `toml:"repo"`
-	Debug        bool           `toml:"debug"`
-	Jobs         []JobConfig    `toml:"jobs"`
-	Clients      []ClientConfig `toml:"clients"`
-}
-
-// JobCfg represents a backup job configuration
-type JobConfig struct {
-	Name       string   `toml:"name"`
-	Tag        []string `toml:"tag"`
-	Files      []string `toml:"files"`
-	PreHook    []string `toml:"preHook"`
-	PostHook   []string `toml:"postHook"`
-	AssignedTo []string `toml:"assigned_to"`
-}
-
-type ClientConfig struct {
-	Name                  string `toml:"name"`
-	ScheduleStartHour     int    `toml:"schedule_start_hour"`     // HH:00 UTC when client starts
-	ScheduleOffsetMinutes int    `toml:"schedule_offset_minutes"` // Delay after start hour
-	PreferredHourRange    []int  `toml:"preferred_hour_range"`    // Preferred window [start, end]
-	MaxConcurrentJobs     int    `toml:"max_concurrent_jobs"`     // Max parallel jobs for this client
-	TimeoutSeconds        int    `toml:"timeout_seconds"`         // Override global timeout
-}
-
 // runResticBackup executes a restic backup with the given job configuration
-func runResticBackup(g Config, j JobConfig) error {
+func runResticBackup(g types.Config, j types.JobConfig) error {
 	// Set a hard timeout for the backup window
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
@@ -134,7 +106,7 @@ func runHooks(c string) error {
 	return nil
 }
 
-func runJobs(cfg Config) error {
+func runJobs(cfg types.Config) error {
 	for _, job := range cfg.Jobs {
 		var err error
 
@@ -167,10 +139,10 @@ func runJobs(cfg Config) error {
 	return nil
 }
 
-func GetConfig(serverAddress, clientID string) (Config, error) {
+func GetConfig(serverAddress, clientID string) (types.Config, error) {
 
 	// Fetch job config from server - all values come from server response
-	config := Config{}
+	config := types.Config{}
 
 	resp, err := http.Get(fmt.Sprintf("%s/config.json?client_id=%s", serverAddress, clientID))
 	if err != nil {

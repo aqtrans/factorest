@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"factorest/types"
 	"fmt"
 	"net/http"
 	"time"
@@ -14,10 +15,10 @@ func ServeHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 // ServeConfig returns global config and
-func ServeConfig(r *http.Request) (Config, error) {
+func ServeConfig(r *http.Request) (types.Config, error) {
 	config, err := LoadConfig()
 	if err != nil {
-		return Config{}, fmt.Errorf("failed to load config: %w", err)
+		return types.Config{}, fmt.Errorf("failed to load config: %w", err)
 	}
 
 	// Extract client ID from header or query parameter
@@ -26,11 +27,11 @@ func ServeConfig(r *http.Request) (Config, error) {
 		clientId = r.URL.Query().Get("client_id")
 	}
 	if clientId == "" {
-		return Config{}, fmt.Errorf("no client_id provided in header or query parameter")
+		return types.Config{}, fmt.Errorf("no client_id provided in header or query parameter")
 	}
 
 	// Find all jobs assigned to this client (including public jobs)
-	var matchingJobs []JobConfig
+	var matchingJobs []types.JobConfig
 	for _, job := range config.Jobs {
 		if isClientAllowedToJob(job, clientId) {
 			matchingJobs = append(matchingJobs, job)
@@ -43,7 +44,7 @@ func ServeConfig(r *http.Request) (Config, error) {
 }
 
 // isClientAllowedToJob checks if a client_id can access this job
-func isClientAllowedToJob(job JobConfig, clientId string) bool {
+func isClientAllowedToJob(job types.JobConfig, clientId string) bool {
 	if len(job.AssignedTo) == 0 {
 		// Job is public (no restrictions)
 		return true
@@ -91,13 +92,13 @@ func ServeReload(w http.ResponseWriter, r *http.Request) {
 }
 
 // ServeProgress returns a placeholder backup status with the client ID
-func ServeProgress(w http.ResponseWriter, r *http.Request) (BackupStatus, error) {
+func ServeProgress(w http.ResponseWriter, r *http.Request) (types.BackupStatus, error) {
 	config, err := LoadConfig()
 	if err != nil {
-		return BackupStatus{Job: "default-job", Progress: 0, Status: "idle", Message: ""}, nil
+		return types.BackupStatus{Job: "default-job", Progress: 0, Status: "idle", Message: ""}, nil
 	}
 
-	status := BackupStatus{
+	status := types.BackupStatus{
 		Job:      config.Jobs[0].Name,
 		Progress: 0,
 		Status:   "idle",
@@ -114,12 +115,4 @@ func ServeProgress(w http.ResponseWriter, r *http.Request) (BackupStatus, error)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(status)
 	return status, nil
-}
-
-type BackupStatus struct {
-	Job      string `json:"job"`
-	Progress int    `json:"progress"`
-	Status   string `json:"status"`
-	Message  string `json:"message,omitempty"`
-	ClientId string `json:"client_id,omitempty"`
 }
