@@ -71,11 +71,11 @@ func main() {
 	// Enable debug logging:
 	slog.SetLogLoggerLevel(slog.LevelDebug)
 
-	slog.Debug("config loaded", slog.Any("cfg", cfg))
-	slog.Info("Password file:", slog.String("pwfile", cfg.PasswordFile))
-	slog.Info("Repository:", slog.String("repo", cfg.Repository))
-	slog.Info("Debug mode:", slog.Bool("debug", cfg.Debug))
-	slog.Info("Jobs loaded:", slog.Int("count", len(cfg.Jobs)))
+	// slog.Debug("config loaded", slog.Any("cfg", cfg))
+	slog.Debug("Password file:", slog.String("pwfile", cfg.PasswordFile))
+	slog.Debug("Repository:", slog.String("repo", cfg.Repository))
+	slog.Debug("Debug mode:", slog.Bool("debug", cfg.Debug))
+	slog.Debug("Jobs loaded:", slog.Int("count", len(cfg.Jobs)))
 
 	slog.Info("Server starting on port localhost:" + cfg.ListenPort)
 

@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -155,11 +154,7 @@ func GetConfig(serverAddress, clientID string) (types.Config, error) {
 		return config, fmt.Errorf("config error: %s - %s", resp.Status, string(body))
 	}
 
-	log.Println(resp.Body)
-
 	json.NewDecoder(resp.Body).Decode(&config)
-
-	log.Println(config)
 
 	fmt.Printf("Client [%s] fetched job: %s\n", clientID, config.Jobs)
 	return config, nil
@@ -181,11 +176,11 @@ func main() {
 	// Enable debug logging:
 	slog.SetLogLoggerLevel(slog.LevelDebug)
 
-	slog.Debug("config loaded", slog.Any("cfg", cfg))
-	slog.Info("Password file:", slog.String("pwfile", cfg.PasswordFile))
-	slog.Info("Repository:", slog.String("repo", cfg.Repository))
-	slog.Info("Debug mode:", slog.Bool("debug", cfg.Debug))
-	slog.Info("Jobs loaded:", slog.Int("count", len(cfg.Jobs)))
+	// slog.Debug("config loaded", slog.Any("cfg", cfg))
+	slog.Debug("Password file:", slog.String("pwfile", cfg.PasswordFile))
+	slog.Debug("Repository:", slog.String("repo", cfg.Repository))
+	slog.Debug("Debug mode:", slog.Bool("debug", cfg.Debug))
+	slog.Debug("Jobs loaded:", slog.Int("count", len(cfg.Jobs)))
 
 	slog.Debug("Jobs config:", slog.Any("jobs", cfg.Jobs))
 
