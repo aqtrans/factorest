@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"log/slog"
@@ -10,9 +11,19 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+var configPath = "config.toml"
+
 func main() {
+
+	// Allow overriding config path
+	config := flag.String("config", "config.toml", "the path to the TOML configuration file")
+	flag.Parse()
+
+	configPath = *config
+
 	// Load initial config
-	cfg, err := LoadConfig()
+	var cfgStore configStore
+	err := cfgStore.Get()
 	if err != nil {
 		slog.Error("error loading config", slog.Any("cfg", err))
 		os.Exit(1)
@@ -36,17 +47,9 @@ func main() {
 				log.Printf("Event received: %s", event)
 
 				// Evaluate specific operation types
-				if event.Has(fsnotify.Write) {
-					log.Printf("Modified file: %s", event.Name)
-					cfg, err = LoadConfig()
-					if err != nil {
-						slog.Error("error loading config", slog.Any("cfg", err))
-						os.Exit(1)
-					}
-				}
-				if event.Has(fsnotify.Create) {
-					log.Printf("Created file: %s", event.Name)
-					cfg, err = LoadConfig()
+				if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
+					slog.Info("config file modified")
+					err = cfgStore.Get()
 					if err != nil {
 						slog.Error("error loading config", slog.Any("cfg", err))
 						os.Exit(1)
@@ -64,7 +67,7 @@ func main() {
 
 	err = watcher.Add("config.toml")
 	if err != nil {
-		slog.Error("Error watching", slog.Any("err", err))
+		slog.Error("Error watching config file", slog.Any("err", err))
 		os.Exit(1)
 	}
 
@@ -72,26 +75,26 @@ func main() {
 	slog.SetLogLoggerLevel(slog.LevelDebug)
 
 	// slog.Debug("config loaded", slog.Any("cfg", cfg))
-	slog.Debug("Password file:", slog.String("pwfile", cfg.PasswordFile))
-	slog.Debug("Repository:", slog.String("repo", cfg.Repository))
-	slog.Debug("Debug mode:", slog.Bool("debug", cfg.Debug))
-	slog.Debug("Jobs loaded:", slog.Int("count", len(cfg.Jobs)))
+	slog.Debug("Password file:", slog.String("pwfile", cfgStore.cfg.PasswordFile))
+	slog.Debug("Repository:", slog.String("repo", cfgStore.cfg.Repository))
+	slog.Debug("Debug mode:", slog.Bool("debug", cfgStore.cfg.Debug))
+	slog.Debug("Jobs loaded:", slog.Int("count", len(cfgStore.cfg.Jobs)))
 
-	slog.Info("Server starting on port localhost:" + cfg.ListenPort)
+	slog.Info("Server starting on port localhost:" + cfgStore.cfg.ListenPort)
 
-	http.HandleFunc("/health", ServeHealth)
+	http.HandleFunc("/health", serveHealth)
 
 	// Fetch all jobs assigned to this client
-	http.HandleFunc("/config.json", ServeConfigJSON)
+	http.HandleFunc("/config.json", serveConfigJSON)
 
 	// Manual reload endpoint (for testing or CLI tools)
 	http.HandleFunc("/reload", func(w http.ResponseWriter, r *http.Request) {
-		ServeReload(w, r)
+		serveReload(w, r)
 	})
 
 	fmt.Printf("Endpoints:\n  GET  /health             - health check\n  GET  /config.json        - fetch backup config (TOML)\n")
 
-	err = http.ListenAndServe("localhost:"+cfg.ListenPort, nil)
+	err = http.ListenAndServe("localhost:"+cfgStore.cfg.ListenPort, nil)
 	if err != nil {
 		slog.Error("HTTP listen error", slog.Any("http", err))
 		os.Exit(1)
