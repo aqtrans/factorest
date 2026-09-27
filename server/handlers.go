@@ -16,24 +16,21 @@ type jobState struct {
 	since time.Time
 }
 
-// backupGuardWindow is how long the guard suppresses repeat triggers after a
-// backup has been issued for a client
-const backupGuardWindow = 12 * time.Hour
-
 // heartbeatStore keeps track of each client's last heartbeat, the
-// jobs the server believes each client is currently running, and when a
-// backup trigger was last issued for the client (the guard window)
+// jobs the server believes each client is currently running, and the
+// local date on which a backup trigger was last issued for the client
+// (the guard window)
 type store struct {
 	sync.Mutex
 	clients map[string]types.Heartbeat
 	running map[string]map[string]jobState
-	pending map[string]time.Time
+	pending map[string]string
 }
 
 var heartbeatStore = &store{
 	clients: make(map[string]types.Heartbeat),
 	running: make(map[string]map[string]jobState),
-	pending: make(map[string]time.Time),
+	pending: make(map[string]string),
 }
 
 func (s *store) hasRunningJob(clientID string) bool {
@@ -53,10 +50,16 @@ func (s *store) clearRunning(clientID, job string) {
 	}
 }
 
-// markPending records when the server last issued a backup trigger for
-// this client; the guard then suppresses repeat triggers for backupGuardWindow
+// localDate renders a time as its local YYYY-MM-DD date
+func localDate(t time.Time) string {
+	return t.In(time.Local).Format("2006-01-02")
+}
+
+// markPending records the local date on which the server last issued a
+// backup trigger for this client; the guard then suppresses repeat
+// triggers for the rest of that client's local day
 func (s *store) markPending(clientID string) {
-	s.pending[clientID] = time.Now()
+	s.pending[clientID] = localDate(time.Now())
 }
 
 // clearPending removes the guard entry for a client
@@ -65,10 +68,10 @@ func (s *store) clearPending(clientID string) {
 }
 
 // guardActive reports whether the backup guard is currently suppressing
-// repeat triggers for this client
+// repeat triggers for this client (a trigger already went out today)
 func (s *store) guardActive(clientID string) bool {
 	at, ok := s.pending[clientID]
-	return ok && time.Since(at) < backupGuardWindow
+	return ok && at == localDate(time.Now())
 }
 
 // sweepStale clears running state for clients whose heartbeats went silent
@@ -82,13 +85,6 @@ func (s *store) sweepStale() {
 				s.clearRunning(id, job)
 			}
 			slog.Warn("cleared stale running state", slog.String("client_id", id))
-		}
-	}
-	// Expire guards older than backupGuardWindow so clients can be
-	// re-triggered once the window has passed
-	for id, at := range s.pending {
-		if time.Since(at) >= backupGuardWindow {
-			s.clearPending(id)
 		}
 	}
 }
@@ -114,12 +110,17 @@ func ServeHeartbeat(w http.ResponseWriter, r *http.Request) {
 	heartbeatStore.Lock()
 	defer heartbeatStore.Unlock()
 
+	// The server stamps the heartbeat with its own clock; the client's
+	// timestamp is ignored so it can't fake freshness or staleness.
+	hb.Timestamp = time.Now()
+
 	heartbeatStore.clients[hb.ClientID] = hb
 
 	// If the client says it's free but the server still thinks it's running,
 	// trust the client and clear the server-side running state.
-	// The guard is intentionally NOT cleared here: it must stay active for
-	// backupGuardWindow even if the client reports idle after a completed backup.
+	// The guard is intentionally NOT cleared here: it stays active until the
+	// client's local day rolls over, so each client gets at most one trigger
+	// per day (a failed job clears it, allowing a same-day retry).
 	if !hb.JobsRunning && heartbeatStore.hasRunningJob(hb.ClientID) {
 		slog.Warn("heartbeat reports no jobs, clearing server state",
 			slog.String("client_id", hb.ClientID))
@@ -184,8 +185,13 @@ func ServeJobStatus(w http.ResponseWriter, r *http.Request) {
 	switch js.Status {
 	case "started":
 		heartbeatStore.markRunning(js.ClientID, js.Job)
-	case "completed", "failed":
+	case "completed":
 		heartbeatStore.clearRunning(js.ClientID, js.Job)
+	case "failed":
+		heartbeatStore.clearRunning(js.ClientID, js.Job)
+		// A failed backup clears the guard so the client can be
+		// re-triggered again today
+		heartbeatStore.clearPending(js.ClientID)
 	}
 
 	slog.Debug("Job status recorded",

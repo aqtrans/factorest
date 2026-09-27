@@ -3,7 +3,8 @@ package types
 import "time"
 
 // Heartbeat is sent by clients to report their health to the server
-// It carries the client's ID, display name, and the time it was sent
+// It carries the client's ID and display name. The timestamp is
+// client-sent but the server overwrites it with its own arrival time.
 type Heartbeat struct {
 	ClientID    string    `json:"client_id"`
 	Name        string    `json:"name"`

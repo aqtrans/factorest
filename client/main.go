@@ -181,10 +181,11 @@ func runJobs(cfg types.Config, clientID, serverAddress string) error {
 
 // sendHeartbeat reports the client's health to the server
 func sendHeartbeat(serverAddress, clientID string) error {
+	// The server stamps the heartbeat with its own arrival time, so no
+	// client-side timestamp is sent
 	hb := types.Heartbeat{
 		ClientID:    clientID,
 		Name:        clientID,
-		Timestamp:   time.Now(),
 		JobsRunning: atomic.LoadInt64(&jobsRunning) == 1,
 	}
 

@@ -11,6 +11,17 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+// parseSchedule parses a client's schedule_time (e.g. "4:41 pm") as a
+// wall-clock time in the local timezone
+func parseSchedule(value string) (time.Time, error) {
+	return time.ParseInLocation("3:04 pm", value, time.Local)
+}
+
+// timeToBackup reports whether a client's daily backup window is open:
+// its scheduled time has passed for the client's local day, and no trigger
+// has already been issued for that day. The window stays open until the
+// client's local day rolls over, so a client that was offline at its
+// scheduled time picks the backup up on its next heartbeat.
 func timeToBackup(clientID string) bool {
 	cfg, err := GetClientConfig(clientID)
 	if err != nil {
@@ -24,16 +35,16 @@ func timeToBackup(clientID string) bool {
 		return false
 	}
 
-	want, err := time.ParseInLocation("3:04 pm", clientCfg.ScheduleTime, time.Local)
+	want, err := parseSchedule(clientCfg.ScheduleTime)
 	if err != nil {
 		slog.Error("bad schedule_time format",
-			slog.String("client_id", clientID),
-			slog.String("value", clientCfg.ScheduleTime))
+			"client_id", clientID,
+			"value", clientCfg.ScheduleTime)
 		return false
 	}
 
 	now := time.Now().In(time.Local)
-	return now.Hour() == want.Hour() && now.Minute() == want.Minute()
+	return now.After(want) || now.Equal(want)
 }
 
 func main() {
