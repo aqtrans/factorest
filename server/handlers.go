@@ -136,14 +136,10 @@ func ServeHeartbeat(w http.ResponseWriter, r *http.Request) {
 		slog.Info("it is time for backups...")
 		status = "do_it"
 		heartbeatStore.markPending(hb.ClientID)
-		cfg, err := LoadConfig()
-		if err != nil {
-			slog.Error("failed to load config", "err", err)
-		} else {
-			for _, job := range cfg.Jobs {
-				if isClientAllowedToJob(job, hb.ClientID) {
-					heartbeatStore.markRunning(hb.ClientID, job.Name)
-				}
+		cfg := configStore.Current()
+		for _, job := range cfg.Jobs {
+			if isClientAllowedToJob(job, hb.ClientID) {
+				heartbeatStore.markRunning(hb.ClientID, job.Name)
 			}
 		}
 	}
@@ -235,11 +231,6 @@ func ServeHealth(w http.ResponseWriter, r *http.Request) {
 
 // ServeConfig returns global config and jobs for the specific client ID
 func ServeConfig(r *http.Request) (types.Config, error) {
-	config, err := LoadConfig()
-	if err != nil {
-		return types.Config{}, fmt.Errorf("failed to load config: %w", err)
-	}
-
 	// Extract client ID from header or query parameter
 	clientId := r.Header.Get("X-Client-ID")
 	if clientId == "" {
@@ -249,17 +240,7 @@ func ServeConfig(r *http.Request) (types.Config, error) {
 		return types.Config{}, fmt.Errorf("no client_id provided in header or query parameter")
 	}
 
-	// Find all jobs assigned to this client (including public jobs)
-	var matchingJobs []types.JobConfig
-	for _, job := range config.Jobs {
-		if isClientAllowedToJob(job, clientId) {
-			matchingJobs = append(matchingJobs, job)
-		}
-	}
-
-	config.Jobs = matchingJobs
-
-	return *config, nil
+	return GetClientConfig(clientId)
 }
 
 // isClientAllowedToJob checks if a client_id can access this job
@@ -295,17 +276,18 @@ func ServeReload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Trigger a reload
-	config, err := LoadConfig()
-	if err != nil {
+	if err := configStore.Reload(configPath); err != nil {
 		http.Error(w, fmt.Sprintf("failed to reload config: %v", err), http.StatusInternalServerError)
 		return
 	}
+
+	cfg := configStore.Current()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":  "reloaded",
 		"message": "Config reloaded successfully",
-		"jobs":    len(config.Jobs),
-		"clients": len(config.Clients),
+		"jobs":    len(cfg.Jobs),
+		"clients": len(cfg.Clients),
 	})
 }

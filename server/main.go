@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -37,8 +38,10 @@ func timeToBackup(clientID string) bool {
 
 func main() {
 	// Load initial config
-	cfg, err := LoadConfig()
-	if err != nil {
+	flag.StringVar(&configPath, "config", "config.toml", "path to the server config file")
+	flag.Parse()
+
+	if err := configStore.Init(configPath); err != nil {
 		slog.Error("error loading config", slog.Any("err", err))
 		os.Exit(1)
 	}
@@ -62,18 +65,10 @@ func main() {
 				slog.Debug("Event received", "event", event)
 
 				// Evaluate specific operation types
-				if event.Has(fsnotify.Write) {
-					cfg, err = LoadConfig()
-					if err != nil {
-						slog.Error("error loading config", slog.Any("err", err))
-						os.Exit(1)
-					}
-				}
-				if event.Has(fsnotify.Create) {
-					cfg, err = LoadConfig()
-					if err != nil {
-						slog.Error("error loading config", slog.Any("err", err))
-						os.Exit(1)
+				if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
+					if err := configStore.Reload(configPath); err != nil {
+						// Keep the last known good config; the store is unchanged.
+						slog.Error("failed to reload config", slog.Any("err", err))
 					}
 				}
 
@@ -86,13 +81,14 @@ func main() {
 		}
 	}()
 
-	err = watcher.Add("config.toml")
+	err = watcher.Add(configPath)
 	if err != nil {
-		slog.Error("Error watching config.toml", slog.Any("err", err))
+		slog.Error("Error watching config file", slog.Any("err", err))
 		os.Exit(1)
 	}
 
 	// Enable debug logging:
+	cfg := configStore.Current()
 	slog.Debug("Debug mode:", slog.Bool("debug", cfg.Debug))
 	if cfg.Debug {
 		slog.Info("debug mode enabled")
