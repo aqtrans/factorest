@@ -31,9 +31,9 @@ func runResticBackup(g types.Config, j types.JobConfig) error {
 	}
 
 	// Create a list of "--tag" flags to throw to Restic
-	tagWithFlags := make([]string, len(j.Tag))
+	tagWithFlags := make([]string, 0, len(j.Tag)*2)
 	for _, tag := range j.Tag {
-		tagWithFlags = append([]string{"--tag", tag})
+		tagWithFlags = append(tagWithFlags, "--tag", tag)
 	}
 
 	// build the full command, should just be tags plus dirs

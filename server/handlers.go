@@ -138,7 +138,7 @@ func ServeHeartbeat(w http.ResponseWriter, r *http.Request) {
 		heartbeatStore.markPending(hb.ClientID)
 		cfg, err := LoadConfig()
 		if err != nil {
-			slog.Error("failed to load config: %v", err)
+			slog.Error("failed to load config", "err", err)
 		} else {
 			for _, job := range cfg.Jobs {
 				if isClientAllowedToJob(job, hb.ClientID) {
@@ -308,30 +308,4 @@ func ServeReload(w http.ResponseWriter, r *http.Request) {
 		"jobs":    len(config.Jobs),
 		"clients": len(config.Clients),
 	})
-}
-
-// ServeProgress returns a placeholder backup status with the client ID
-func ServeProgress(w http.ResponseWriter, r *http.Request) (types.BackupStatus, error) {
-	config, err := LoadConfig()
-	if err != nil {
-		return types.BackupStatus{Job: "default-job", Progress: 0, Status: "idle", Message: ""}, nil
-	}
-
-	status := types.BackupStatus{
-		Job:      config.Jobs[0].Name,
-		Progress: 0,
-		Status:   "idle",
-		Message:  "",
-	}
-
-	// Add client ID if present
-	clientId := r.Header.Get("X-Client-ID")
-	if clientId == "" {
-		clientId = r.URL.Query().Get("client_id")
-	}
-	status.ClientId = clientId
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(status)
-	return status, nil
 }
