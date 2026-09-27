@@ -1,5 +1,29 @@
 package types
 
+import "time"
+
+// Heartbeat is sent by clients to report their health to the server
+// It carries the client's ID, display name, and the time it was sent
+type Heartbeat struct {
+	ClientID    string    `json:"client_id"`
+	Name        string    `json:"name"`
+	Timestamp   time.Time `json:"timestamp"`
+	JobsRunning bool      `json:"running"`
+}
+
+// JobStatus reports a job lifecycle event from a client to the server
+type JobStatus struct {
+	Job      string `json:"job"`
+	ClientID string `json:"client_id"`
+	Status   string `json:"status"` // "started", "completed", "failed"
+}
+
+type HeartbeatResponse struct {
+	Status    string `json:"status"`
+	ClientID  string `json:"client_id"`
+	Timestamp int64  `json:"server_time"`
+}
+
 // Config holds all configuration loaded from config.toml
 // Struct field names must be exported (capitalized) for TOML unmarshaling to work
 type Config struct {
@@ -22,12 +46,9 @@ type JobConfig struct {
 }
 
 type ClientConfig struct {
-	Name                  string `toml:"name"`
-	ScheduleStartHour     int    `toml:"schedule_start_hour"`     // HH:00 UTC when client starts
-	ScheduleOffsetMinutes int    `toml:"schedule_offset_minutes"` // Delay after start hour
-	PreferredHourRange    []int  `toml:"preferred_hour_range"`    // Preferred window [start, end]
-	MaxConcurrentJobs     int    `toml:"max_concurrent_jobs"`     // Max parallel jobs for this client
-	TimeoutSeconds        int    `toml:"timeout_seconds"`         // Override global timeout
+	Name           string `toml:"name"`
+	ScheduleTime   string `toml:"schedule_time"`   // AM/PM
+	TimeoutSeconds int    `toml:"timeout_seconds"` // Override global timeout
 }
 
 type BackupStatus struct {

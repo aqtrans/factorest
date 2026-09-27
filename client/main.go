@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"factorest/types"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -105,9 +107,41 @@ func runHooks(c string) error {
 	return nil
 }
 
-func runJobs(cfg types.Config) error {
+// reportJobStatus tells the server about a job lifecycle event
+func reportJobStatus(serverAddress, clientID, job, status string) error {
+	slog.Debug(job, clientID, status)
+
+	body, err := json.Marshal(types.JobStatus{Job: job, ClientID: clientID, Status: status})
+	if err != nil {
+		return fmt.Errorf("failed to encode job status: %w", err)
+	}
+
+	resp, err := http.Post(fmt.Sprintf("%s/job-status", serverAddress), "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to report job status: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("job status error: %s - %s", resp.Status, string(respBody))
+	}
+
+	return nil
+}
+
+// jobsRunning is set while at least one job is executing so heartbeats
+// can tell the server the client is busy
+var jobsRunning int64
+
+func runJobs(cfg types.Config, clientID, serverAddress string) error {
 	for _, job := range cfg.Jobs {
 		var err error
+
+		if err := reportJobStatus(serverAddress, clientID, job.Name, "started"); err != nil {
+			slog.Error("failed to report job started", slog.Any("err", err))
+			continue
+		}
 
 		if len(job.PreHook) > 0 {
 			for _, preHook := range job.PreHook {
@@ -122,6 +156,9 @@ func runJobs(cfg types.Config) error {
 		err = runResticBackup(cfg, job)
 		if err != nil {
 			slog.Error("Error running backup", slog.Any("err", err))
+			if err2 := reportJobStatus(serverAddress, clientID, job.Name, "failed"); err2 != nil {
+				slog.Error("failed to report job failed", slog.Any("err", err2))
+			}
 			return err
 		}
 
@@ -134,7 +171,65 @@ func runJobs(cfg types.Config) error {
 				}
 			}
 		}
+
+		if err := reportJobStatus(serverAddress, clientID, job.Name, "completed"); err != nil {
+			slog.Error("failed to report job completed", slog.Any("err", err))
+		}
 	}
+	return nil
+}
+
+// sendHeartbeat reports the client's health to the server
+func sendHeartbeat(serverAddress, clientID string) error {
+	hb := types.Heartbeat{
+		ClientID:    clientID,
+		Name:        clientID,
+		Timestamp:   time.Now(),
+		JobsRunning: atomic.LoadInt64(&jobsRunning) == 1,
+	}
+
+	body, err := json.Marshal(hb)
+	if err != nil {
+		return fmt.Errorf("failed to encode heartbeat: %w", err)
+	}
+
+	slog.Debug("sending heartbeat", slog.String("server", serverAddress), slog.String("client ID", clientID))
+
+	resp, err := http.Post(fmt.Sprintf("%s/heartbeat", serverAddress), "application/json", bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to send heartbeat: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("heartbeat error: %s - %s", resp.Status, string(respBody))
+	}
+
+	hbresp := types.HeartbeatResponse{}
+
+	// Decode heartbeat response JSON and check if we're due to run jobs
+	json.NewDecoder(resp.Body).Decode(&hbresp)
+	if hbresp.Status == "do_it" {
+		config, err := GetConfig(serverAddress, clientID)
+		slog.Info("time to backup...")
+		if err != nil {
+			return fmt.Errorf("failed to fetch config from server: %w", err)
+		}
+
+		// Run jobs in the background so heartbeats (with JobsRunning set)
+		// keep reaching the server while backups are in flight
+		atomic.StoreInt64(&jobsRunning, 1)
+		slog.Info("starting jobs...")
+		go func() {
+			defer atomic.StoreInt64(&jobsRunning, 0)
+			if err := runJobs(config, clientID, serverAddress); err != nil {
+				slog.Error("failed to run jobs", slog.Any("err", err))
+			}
+		}()
+
+	}
+
 	return nil
 }
 
@@ -167,22 +262,37 @@ func main() {
 
 	flag.Parse()
 
-	cfg, err := GetConfig(*serverAddress, *clientID)
-	if err != nil {
-		slog.Error("error getting config", slog.Any("err", err))
-		os.Exit(1)
-	}
+	/*
+		cfg, err := GetConfig(*serverAddress, *clientID)
+		if err != nil {
+			slog.Error("error getting config", slog.Any("err", err))
+			os.Exit(1)
+		}
+	*/
 
 	// Enable debug logging:
 	slog.SetLogLoggerLevel(slog.LevelDebug)
 
-	// slog.Debug("config loaded", slog.Any("cfg", cfg))
-	slog.Debug("Password file:", slog.String("pwfile", cfg.PasswordFile))
-	slog.Debug("Repository:", slog.String("repo", cfg.Repository))
-	slog.Debug("Debug mode:", slog.Bool("debug", cfg.Debug))
-	slog.Debug("Jobs loaded:", slog.Int("count", len(cfg.Jobs)))
+	/*
+		// slog.Debug("config loaded", slog.Any("cfg", cfg))
+		slog.Debug("Password file:", slog.String("pwfile", cfg.PasswordFile))
+		slog.Debug("Repository:", slog.String("repo", cfg.Repository))
+		slog.Debug("Debug mode:", slog.Bool("debug", cfg.Debug))
+		slog.Debug("Jobs loaded:", slog.Int("count", len(cfg.Jobs)))
 
-	slog.Debug("Jobs config:", slog.Any("jobs", cfg.Jobs))
+		slog.Debug("Jobs config:", slog.Any("jobs", cfg.Jobs))
+	*/
+
+	// Start the heartbeat timer - report client health every 15 seconds
+	heartbeatInterval := 5 * time.Second
+	heartbeatTicker := time.NewTicker(heartbeatInterval)
+	go func() {
+		for range heartbeatTicker.C {
+			if err := sendHeartbeat(*serverAddress, *clientID); err != nil {
+				slog.Error("heartbeat failed", slog.Any("err", err))
+			}
+		}
+	}()
 
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)

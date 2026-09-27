@@ -2,26 +2,52 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
+
+func timeToBackup(clientID string) bool {
+	cfg, err := GetClientConfig(clientID)
+	if err != nil {
+		slog.Error("failed to load config", "err", err, "client_id", clientID)
+		return false
+	}
+
+	clientCfg, ok := GetClientEntry(cfg, clientID)
+	if !ok || clientCfg.ScheduleTime == "" {
+		slog.Debug("schedule time is empty", "client", clientID)
+		return false
+	}
+
+	want, err := time.ParseInLocation("3:04 pm", clientCfg.ScheduleTime, time.Local)
+	if err != nil {
+		slog.Error("bad schedule_time format",
+			slog.String("client_id", clientID),
+			slog.String("value", clientCfg.ScheduleTime))
+		return false
+	}
+
+	now := time.Now().In(time.Local)
+	return now.Hour() == want.Hour() && now.Minute() == want.Minute()
+}
 
 func main() {
 	// Load initial config
 	cfg, err := LoadConfig()
 	if err != nil {
-		slog.Error("error loading config", slog.Any("cfg", err))
+		slog.Error("error loading config", slog.Any("err", err))
 		os.Exit(1)
 	}
 
 	// Create a new file watcher
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("error creating file watcher", slog.Any("err", err))
+		os.Exit(1)
 	}
 	defer watcher.Close()
 
@@ -33,22 +59,20 @@ func main() {
 				if !ok {
 					return
 				}
-				log.Printf("Event received: %s", event)
+				slog.Debug("Event received", "event", event)
 
 				// Evaluate specific operation types
 				if event.Has(fsnotify.Write) {
-					log.Printf("Modified file: %s", event.Name)
 					cfg, err = LoadConfig()
 					if err != nil {
-						slog.Error("error loading config", slog.Any("cfg", err))
+						slog.Error("error loading config", slog.Any("err", err))
 						os.Exit(1)
 					}
 				}
 				if event.Has(fsnotify.Create) {
-					log.Printf("Created file: %s", event.Name)
 					cfg, err = LoadConfig()
 					if err != nil {
-						slog.Error("error loading config", slog.Any("cfg", err))
+						slog.Error("error loading config", slog.Any("err", err))
 						os.Exit(1)
 					}
 				}
@@ -57,29 +81,47 @@ func main() {
 				if !ok {
 					return
 				}
-				slog.Error("Error:", slog.Any("cfg", err))
+				slog.Error("Config watcher error:", slog.Any("err", err))
 			}
 		}
 	}()
 
 	err = watcher.Add("config.toml")
 	if err != nil {
-		slog.Error("Error watching", slog.Any("err", err))
+		slog.Error("Error watching config.toml", slog.Any("err", err))
 		os.Exit(1)
 	}
 
 	// Enable debug logging:
-	slog.SetLogLoggerLevel(slog.LevelDebug)
+	slog.Debug("Debug mode:", slog.Bool("debug", cfg.Debug))
+	if cfg.Debug {
+		slog.Info("debug mode enabled")
+		slog.SetLogLoggerLevel(slog.LevelDebug)
+	}
 
-	// slog.Debug("config loaded", slog.Any("cfg", cfg))
 	slog.Debug("Password file:", slog.String("pwfile", cfg.PasswordFile))
 	slog.Debug("Repository:", slog.String("repo", cfg.Repository))
-	slog.Debug("Debug mode:", slog.Bool("debug", cfg.Debug))
 	slog.Debug("Jobs loaded:", slog.Int("count", len(cfg.Jobs)))
-
 	slog.Info("Server starting on port localhost:" + cfg.ListenPort)
 
 	http.HandleFunc("/health", ServeHealth)
+
+	// Client heartbeat (POST) - reports client health to the server
+	http.HandleFunc("/heartbeat", ServeHeartbeat)
+
+	// Client job lifecycle reports (started / completed / failed)
+	http.HandleFunc("/job-status", ServeJobStatus)
+
+	// Periodically drop running state for clients that have gone silent
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		for range t.C {
+			heartbeatStore.sweepStale()
+		}
+	}()
+
+	// List of clients seen so far with their last heartbeat
+	http.HandleFunc("/heartbeats", ListHeartbeats)
 
 	// Fetch all jobs assigned to this client
 	http.HandleFunc("/config.json", ServeConfigJSON)
@@ -89,7 +131,7 @@ func main() {
 		ServeReload(w, r)
 	})
 
-	fmt.Printf("Endpoints:\n  GET  /health             - health check\n  GET  /config.json        - fetch backup config (TOML)\n")
+	fmt.Printf("Endpoints:\n  GET  /health             - health check\n  GET  /config.json        - fetch backup config (TOML)\n  POST /heartbeat          - client heartbeat\n  POST /job-status         - job lifecycle report (started/completed/failed)\n  GET  /heartbeats         - list client heartbeats\n")
 
 	err = http.ListenAndServe("localhost:"+cfg.ListenPort, nil)
 	if err != nil {
