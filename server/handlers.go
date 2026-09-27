@@ -8,15 +8,15 @@ import (
 	"time"
 )
 
-func ServeHealth(w http.ResponseWriter, r *http.Request) {
+func serveHealth(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprintf(w, `{"status":"ok","server_time":%d}`, now.Unix())
 }
 
-// ServeConfig returns global config and
-func ServeConfig(r *http.Request) (types.Config, error) {
-	config, err := LoadConfig()
+// serveConfig returns global config and
+func serveConfig(r *http.Request) (types.Config, error) {
+	config, err := loadConfig()
 	if err != nil {
 		return types.Config{}, fmt.Errorf("failed to load config: %w", err)
 	}
@@ -57,9 +57,9 @@ func isClientAllowedToJob(job types.JobConfig, clientId string) bool {
 	return false
 }
 
-// ServeConfigJSON returns JSON-encoded list of jobs for the client
-func ServeConfigJSON(w http.ResponseWriter, r *http.Request) {
-	jobs, err := ServeConfig(r)
+// serveConfigJSON returns JSON-encoded list of jobs for the client
+func serveConfigJSON(w http.ResponseWriter, r *http.Request) {
+	jobs, err := serveConfig(r)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("error: %v", err), http.StatusInternalServerError)
 		return
@@ -68,15 +68,15 @@ func ServeConfigJSON(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(jobs)
 }
 
-// ServeReload - manually trigger config reload (for testing or CLI tools)
-func ServeReload(w http.ResponseWriter, r *http.Request) {
+// serveReload - manually trigger config reload (for testing or CLI tools)
+func serveReload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	// Trigger a reload
-	config, err := LoadConfig()
+	config, err := loadConfig()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("failed to reload config: %v", err), http.StatusInternalServerError)
 		return
@@ -91,9 +91,9 @@ func ServeReload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ServeProgress returns a placeholder backup status with the client ID
-func ServeProgress(w http.ResponseWriter, r *http.Request) (types.BackupStatus, error) {
-	config, err := LoadConfig()
+// serveProgress returns a placeholder backup status with the client ID
+func serveProgress(w http.ResponseWriter, r *http.Request) (types.BackupStatus, error) {
+	config, err := loadConfig()
 	if err != nil {
 		return types.BackupStatus{Job: "default-job", Progress: 0, Status: "idle", Message: ""}, nil
 	}

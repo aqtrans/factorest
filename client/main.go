@@ -138,7 +138,7 @@ func runJobs(cfg types.Config) error {
 	return nil
 }
 
-func GetConfig(serverAddress, clientID string) (types.Config, error) {
+func getConfig(serverAddress, clientID string) (types.Config, error) {
 
 	// Fetch job config from server - all values come from server response
 	config := types.Config{}
@@ -167,7 +167,7 @@ func main() {
 
 	flag.Parse()
 
-	cfg, err := GetConfig(*serverAddress, *clientID)
+	cfg, err := getConfig(*serverAddress, *clientID)
 	if err != nil {
 		slog.Error("error getting config", slog.Any("err", err))
 		os.Exit(1)
