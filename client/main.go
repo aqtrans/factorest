@@ -29,9 +29,9 @@ func runResticBackup(g types.Config, j types.JobConfig) error {
 	}
 
 	// Create a list of "--tag" flags to throw to Restic
-	tagWithFlags := make([]string, len(j.Tag))
+	tagWithFlags := make([]string, 0, len(j.Tag)*2)
 	for _, tag := range j.Tag {
-		tagWithFlags = append([]string{"--tag", tag})
+		tagWithFlags = append(tagWithFlags, "--tag", tag)
 	}
 
 	// build the full command, should just be tags plus dirs
@@ -160,34 +160,98 @@ func getConfig(serverAddress, clientID string) (types.Config, error) {
 	return config, nil
 }
 
+// sendHeartbeat POSTs a heartbeat to the server and returns the status
+// from the response. The server responds with status "backup" when a
+// backup should be started; "ok" otherwise.
+func sendHeartbeat(serverAddress, clientID string) string {
+	resp, err := http.Post(serverAddress+"/clients/"+clientID+"/status", "application/json", nil)
+	if err != nil {
+		slog.Error("heartbeat failed", slog.Any("err", err))
+		return "error"
+	}
+	defer resp.Body.Close()
+
+	var heartbeat struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&heartbeat); err != nil {
+		slog.Error("failed to decode heartbeat response", slog.Any("err", err))
+		return "error"
+	}
+	slog.Debug("heartbeat", slog.String("status", heartbeat.Status))
+	return heartbeat.Status
+}
+
 func main() {
 
 	clientID := flag.String("client-id", "", "the client name to present to the server")
 	serverAddress := flag.String("server", "http://localhost:8080", "address of the server")
+	heartbeatSeconds := flag.Int("heartbeat", 10, "seconds between heartbeats")
 
 	flag.Parse()
 
-	cfg, err := getConfig(*serverAddress, *clientID)
-	if err != nil {
-		slog.Error("error getting config", slog.Any("err", err))
-		os.Exit(1)
-	}
+	/* 	cfg, err := getConfig(*serverAddress, *clientID)
+	   	if err != nil {
+	   		slog.Error("error getting config", slog.Any("err", err))
+	   		os.Exit(1)
+	   	}
+	*/
 
 	// Enable debug logging:
 	slog.SetLogLoggerLevel(slog.LevelDebug)
 
 	// slog.Debug("config loaded", slog.Any("cfg", cfg))
-	slog.Debug("Password file:", slog.String("pwfile", cfg.PasswordFile))
-	slog.Debug("Repository:", slog.String("repo", cfg.Repository))
-	slog.Debug("Debug mode:", slog.Bool("debug", cfg.Debug))
-	slog.Debug("Jobs loaded:", slog.Int("count", len(cfg.Jobs)))
+	// slog.Debug("Password file:", slog.String("pwfile", cfg.PasswordFile))
+	// slog.Debug("Repository:", slog.String("repo", cfg.Repository))
+	// slog.Debug("Debug mode:", slog.Bool("debug", cfg.Debug))
+	// slog.Debug("Jobs loaded:", slog.Int("count", len(cfg.Jobs)))
 
-	slog.Debug("Jobs config:", slog.Any("jobs", cfg.Jobs))
+	// slog.Debug("Jobs config:", slog.Any("jobs", cfg.Jobs))
 
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
-	fmt.Println("Client running. Connecting to " + *serverAddress)
-	<-done // Will block here until user hits ctrl+c
-	slog.Info("Shutting down.")
 
+	// Heartbeat interval, configurable via command-line, default 10s.
+	interval := 10 * time.Second
+	if *heartbeatSeconds > 0 {
+		interval = time.Duration(*heartbeatSeconds) * time.Second
+	}
+
+	// Send initial heartbeat to check connection
+	status := sendHeartbeat(*serverAddress, *clientID)
+	if status == "error" {
+		slog.Error("error sending heartbeat to server", slog.String("server", *serverAddress))
+		os.Exit(1)
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	// busy tracks whether a backup run is in progress, so triggers while
+	// jobs are running don't start overlapping runs.
+	busy := false
+
+	for {
+		select {
+		case <-done:
+			slog.Info("Shutting down.")
+			return
+		case <-ticker.C:
+			if status := sendHeartbeat(*serverAddress, *clientID); status == "backup" && !busy {
+				busy = true
+				// Fetch config from the server
+				cfg, err := getConfig(*serverAddress, *clientID)
+				if err != nil {
+					slog.Error("error getting config from server", slog.String("server", *serverAddress), slog.Any("err", err))
+					os.Exit(1)
+				}
+				go func() {
+					defer func() { busy = false }()
+					if err := runJobs(cfg); err != nil {
+						slog.Error("backup run failed", slog.Any("err", err))
+					}
+				}()
+			}
+		}
+	}
 }

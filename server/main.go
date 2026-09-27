@@ -13,6 +13,9 @@ import (
 
 var configPath = "config.toml"
 
+// Package-level so heartbeat handlers can read the active config.
+var cfgStore configStore
+
 func main() {
 
 	// Allow overriding config path
@@ -22,7 +25,6 @@ func main() {
 	configPath = *config
 
 	// Load initial config
-	var cfgStore configStore
 	err := cfgStore.Get()
 	if err != nil {
 		slog.Error("error loading config", slog.Any("cfg", err))
@@ -82,19 +84,22 @@ func main() {
 
 	slog.Info("Server starting on port localhost:" + cfgStore.cfg.ListenPort)
 
-	http.HandleFunc("/health", serveHealth)
+	mux := http.NewServeMux()
 
 	// Fetch all jobs assigned to this client
-	http.HandleFunc("/config.json", serveConfigJSON)
+	mux.HandleFunc("GET /health", serveHealth)
+	mux.HandleFunc("GET /config.json", serveConfigJSON)
+	mux.HandleFunc("POST /reload", serveReload)
 
-	// Manual reload endpoint (for testing or CLI tools)
-	http.HandleFunc("/reload", func(w http.ResponseWriter, r *http.Request) {
-		serveReload(w, r)
-	})
+	// Heartbeat and client state endpoints
+	mux.HandleFunc("POST /clients/{id}/status", serveClientStatus)
+	mux.HandleFunc("POST /clients/{id}/backup", serveClientBackup)
+	mux.HandleFunc("GET /clients", serveClients)
+	mux.HandleFunc("GET /clients/{id}", serveClient)
 
-	fmt.Printf("Endpoints:\n  GET  /health             - health check\n  GET  /config.json        - fetch backup config (TOML)\n")
+	fmt.Printf("Endpoints:\n  GET  /health             - health check\n  GET  /config.json        - fetch backup config (JSON)\n  POST /clients/{id}/status - client heartbeat\n  POST /clients/{id}/backup - manual backup trigger\n  GET  /clients            - live client list\n  GET  /clients/{id}       - single client view\n")
 
-	err = http.ListenAndServe("localhost:"+cfgStore.cfg.ListenPort, nil)
+	err = http.ListenAndServe("localhost:"+cfgStore.cfg.ListenPort, mux)
 	if err != nil {
 		slog.Error("HTTP listen error", slog.Any("http", err))
 		os.Exit(1)
