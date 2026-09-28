@@ -9,6 +9,7 @@ type Config struct {
 	ListenPort   string         `toml:"listen_port"`
 	Jobs         []JobConfig    `toml:"jobs"`
 	Clients      []ClientConfig `toml:"clients"`
+	Client       ClientConfig   `toml:"-"` // populated by server per-request, not from TOML
 }
 
 // JobCfg represents a backup job configuration
@@ -22,8 +23,12 @@ type JobConfig struct {
 }
 
 type ClientConfig struct {
-	Name         string `toml:"name"`
-	ScheduleTime string `toml:"schedule_time"` // e.g. "4:40 pm" — local time when client starts
+	Name         string   `toml:"name"`
+	Repository   string   `toml:"repo"`          // optional override
+	ScheduleTime string   `toml:"schedule_time"` // e.g. "4:40 pm" — local time when client starts
+	PreHook      []string `toml:"preHook"`       // commands to run before all jobs start
+	PostHook     []string `toml:"postHook"`      // commands to run after all jobs succeed
+	OnFailure    []string `toml:"onFailure"`     // commands to run if any job fails
 }
 
 type BackupStatus struct {

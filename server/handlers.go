@@ -40,6 +40,17 @@ func serveConfig(r *http.Request) (types.Config, error) {
 
 	config.Jobs = matchingJobs
 
+	// Attach the matching client config so the client can run its own hooks
+	for _, c := range config.Clients {
+		if c.Name == clientId {
+			config.Client = c
+			if c.Repository != "" {
+				config.Repository = c.Repository // client-level override
+			}
+			break
+		}
+	}
+
 	return *config, nil
 }
 

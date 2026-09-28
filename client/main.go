@@ -75,66 +75,101 @@ func runResticBackup(g types.Config, j types.JobConfig) error {
 	return nil
 }
 
-// runHooks executes a pre/post hook command
-func runHooks(c string) error {
+// runHooks executes a hook command with a descriptive label for logging
+func runHooks(label, c string) error {
 	// Set a hard timeout for the hook execution
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
 
-	// Target the restic binary with args.
-	// Separating keys and flags protects against command injection vulnerabilities.
-	slog.Info("Executing prehook: " + c)
+	slog.Info("Executing " + label + ": " + c)
 	cmd := exec.CommandContext(ctx, "sh", "-c", c)
 
 	slog.Debug(cmd.String())
 
-	// Stream restic's real-time progress straight to your terminal's stdout/stderr
+	// Stream output straight to your terminal's stdout/stderr
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
 	// Run starts the process and blocks until it completes
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("restic backup timed out")
+			return fmt.Errorf("hook timed out: %s", label)
 		}
-		return fmt.Errorf("restic backup failed: %w", err)
+		return fmt.Errorf("hook failed (%s): %w", label, err)
 	}
 
-	slog.Info("Hook completed successfully!")
+	slog.Info("Hook completed successfully: " + label)
 
 	return nil
 }
 
 func runJobs(cfg types.Config) error {
+	// Client-level pre-hooks: run once before all jobs start
+	for _, hook := range cfg.Client.PreHook {
+		if err := runHooks("client pre-hook", hook); err != nil {
+			slog.Error("Error running client pre-hook", slog.Any("err", err))
+			return err
+		}
+	}
+
+	failed := false
 	for _, job := range cfg.Jobs {
 		var err error
 
 		if len(job.PreHook) > 0 {
 			for _, preHook := range job.PreHook {
-				err = runHooks(preHook)
+				err = runHooks("job pre-hook ("+job.Name+")", preHook)
 				if err != nil {
 					slog.Error("Error running preHook", slog.Any("err", err))
-					return err
+					failed = true
+					break
 				}
 			}
+		}
+		if failed {
+			break
 		}
 
 		err = runResticBackup(cfg, job)
 		if err != nil {
 			slog.Error("Error running backup", slog.Any("err", err))
-			return err
+			failed = true
+			break
 		}
 
 		if len(job.PostHook) > 0 {
 			for _, postHook := range job.PostHook {
-				err = runHooks(postHook)
+				err = runHooks("job post-hook ("+job.Name+")", postHook)
 				if err != nil {
 					slog.Error("Error running postHook", slog.Any("err", err))
-					return err
+					failed = true
+					break
 				}
 			}
 		}
+		if failed {
+			break
+		}
 	}
+
+	if failed {
+		// Client-level failure hooks: notify that the run failed
+		for _, hook := range cfg.Client.OnFailure {
+			if err := runHooks("client onFailure-hook", hook); err != nil {
+				slog.Error("Error running onFailure hook", slog.Any("err", err))
+			}
+		}
+		return fmt.Errorf("backup run failed")
+	}
+
+	// Client-level post-hooks: run once after all jobs succeed
+	for _, hook := range cfg.Client.PostHook {
+		if err := runHooks("client post-hook", hook); err != nil {
+			slog.Error("Error running client post-hook", slog.Any("err", err))
+			return err
+		}
+	}
+
 	return nil
 }
 
