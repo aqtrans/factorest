@@ -67,7 +67,7 @@ func main() {
 		}
 	}()
 
-	err = watcher.Add("config.toml")
+	err = watcher.Add(*config)
 	if err != nil {
 		slog.Error("Error watching config file", slog.Any("err", err))
 		os.Exit(1)
