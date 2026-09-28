@@ -3,14 +3,14 @@ package types
 // Config holds all configuration loaded from config.toml
 // Struct field names must be exported (capitalized) for TOML unmarshaling to work
 type Config struct {
-	PasswordFile string         `toml:"pwfile"`
-	Repository   string         `toml:"repo"`
-	Debug        bool           `toml:"debug"`
-	DryRun       bool           `toml:"dry-run"`
-	ListenPort   string         `toml:"listen_port"`
-	Jobs         []JobConfig    `toml:"jobs"`
-	Clients      []ClientConfig `toml:"clients"`
-	Client       ClientConfig   `toml:"-"` // populated by server per-request, not from TOML
+	PasswordFile  string         `toml:"pwfile"`
+	Repository    string         `toml:"repo"`
+	Debug         bool           `toml:"debug"`
+	DryRun        bool           `toml:"dry-run"`
+	ListenAddress string         `toml:"listen_address"`
+	Jobs          []JobConfig    `toml:"jobs"`
+	Clients       []ClientConfig `toml:"clients"`
+	Client        ClientConfig   `toml:"-"` // populated by server per-request, not from TOML
 }
 
 // JobCfg represents a backup job configuration

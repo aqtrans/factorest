@@ -82,7 +82,7 @@ func main() {
 	slog.Debug("Debug mode:", slog.Bool("debug", cfgStore.cfg.Debug))
 	slog.Debug("Jobs loaded:", slog.Int("count", len(cfgStore.cfg.Jobs)))
 
-	slog.Info("Server starting on port localhost:" + cfgStore.cfg.ListenPort)
+	slog.Info("Server starting on " + cfgStore.cfg.ListenAddress)
 
 	mux := http.NewServeMux()
 
@@ -99,7 +99,7 @@ func main() {
 
 	fmt.Printf("Endpoints:\n  GET  /health             - health check\n  GET  /config.json        - fetch backup config (JSON)\n  POST /clients/{id}/status - client heartbeat\n  POST /clients/{id}/backup - manual backup trigger\n  GET  /clients            - live client list\n  GET  /clients/{id}       - single client view\n")
 
-	err = http.ListenAndServe("localhost:"+cfgStore.cfg.ListenPort, mux)
+	err = http.ListenAndServe(cfgStore.cfg.ListenAddress, mux)
 	if err != nil {
 		slog.Error("HTTP listen error", slog.Any("http", err))
 		os.Exit(1)
