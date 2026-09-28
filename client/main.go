@@ -75,14 +75,16 @@ func runResticBackup(g types.Config, j types.JobConfig) error {
 	return nil
 }
 
-// runHooks executes a hook command with a descriptive label for logging
-func runHooks(label, c string) error {
+// runHooks executes a hook command with a descriptive label for logging.
+// extraEnv are additional KEY=VALUE environment variables available to the hook.
+func runHooks(label, c string, extraEnv ...string) error {
 	// Set a hard timeout for the hook execution
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
 
 	slog.Info("Executing " + label + ": " + c)
 	cmd := exec.CommandContext(ctx, "sh", "-c", c)
+	cmd.Env = append(os.Environ(), extraEnv...)
 
 	slog.Debug(cmd.String())
 
@@ -104,15 +106,24 @@ func runHooks(label, c string) error {
 }
 
 func runJobs(cfg types.Config) error {
+	clientID := cfg.Client.Name
+	jobCount := len(cfg.Jobs)
+
+	// Base env vars available to all client-level hooks
+	baseEnv := []string{
+		"CLIENT_ID=" + clientID,
+		"JOB_COUNT=" + fmt.Sprintf("%d", jobCount),
+	}
+
 	// Client-level pre-hooks: run once before all jobs start
 	for _, hook := range cfg.Client.PreHook {
-		if err := runHooks("client pre-hook", hook); err != nil {
+		if err := runHooks("client pre-hook", hook, baseEnv...); err != nil {
 			slog.Error("Error running client pre-hook", slog.Any("err", err))
 			return err
 		}
 	}
 
-	failed := false
+	failedJob := ""
 	for _, job := range cfg.Jobs {
 		var err error
 
@@ -121,19 +132,19 @@ func runJobs(cfg types.Config) error {
 				err = runHooks("job pre-hook ("+job.Name+")", preHook)
 				if err != nil {
 					slog.Error("Error running preHook", slog.Any("err", err))
-					failed = true
+					failedJob = job.Name
 					break
 				}
 			}
 		}
-		if failed {
+		if failedJob != "" {
 			break
 		}
 
 		err = runResticBackup(cfg, job)
 		if err != nil {
 			slog.Error("Error running backup", slog.Any("err", err))
-			failed = true
+			failedJob = job.Name
 			break
 		}
 
@@ -142,20 +153,21 @@ func runJobs(cfg types.Config) error {
 				err = runHooks("job post-hook ("+job.Name+")", postHook)
 				if err != nil {
 					slog.Error("Error running postHook", slog.Any("err", err))
-					failed = true
+					failedJob = job.Name
 					break
 				}
 			}
 		}
-		if failed {
+		if failedJob != "" {
 			break
 		}
 	}
 
-	if failed {
+	if failedJob != "" {
 		// Client-level failure hooks: notify that the run failed
+		failEnv := append(baseEnv, "FAILED_JOBS="+failedJob)
 		for _, hook := range cfg.Client.OnFailure {
-			if err := runHooks("client onFailure-hook", hook); err != nil {
+			if err := runHooks("client onFailure-hook", hook, failEnv...); err != nil {
 				slog.Error("Error running onFailure hook", slog.Any("err", err))
 			}
 		}
@@ -164,7 +176,7 @@ func runJobs(cfg types.Config) error {
 
 	// Client-level post-hooks: run once after all jobs succeed
 	for _, hook := range cfg.Client.PostHook {
-		if err := runHooks("client post-hook", hook); err != nil {
+		if err := runHooks("client post-hook", hook, baseEnv...); err != nil {
 			slog.Error("Error running client post-hook", slog.Any("err", err))
 			return err
 		}
