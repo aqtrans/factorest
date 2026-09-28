@@ -36,8 +36,8 @@ func runResticBackup(g types.Config, j types.JobConfig) error {
 
 	// build the full command, should just be tags plus dirs
 	var backupCmd []string
-	// Debug mode: include --dry-run flag
-	if g.Debug {
+	// Dry run mode: include --dry-run flag
+	if g.DryRun {
 		backupCmd = append([]string{"backup", "--dry-run", "--tag", hostname}, tagWithFlags...)
 	} else {
 		backupCmd = append([]string{"backup", "--tag", hostname}, tagWithFlags...)

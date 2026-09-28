@@ -6,6 +6,7 @@ type Config struct {
 	PasswordFile string         `toml:"pwfile"`
 	Repository   string         `toml:"repo"`
 	Debug        bool           `toml:"debug"`
+	DryRun       bool           `toml:"dry-run"`
 	ListenPort   string         `toml:"listen_port"`
 	Jobs         []JobConfig    `toml:"jobs"`
 	Clients      []ClientConfig `toml:"clients"`
