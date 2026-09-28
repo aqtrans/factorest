@@ -22,12 +22,8 @@ type JobConfig struct {
 }
 
 type ClientConfig struct {
-	Name                  string `toml:"name"`
-	ScheduleStartHour     int    `toml:"schedule_start_hour"`     // HH:00 UTC when client starts
-	ScheduleOffsetMinutes int    `toml:"schedule_offset_minutes"` // Delay after start hour
-	PreferredHourRange    []int  `toml:"preferred_hour_range"`    // Preferred window [start, end]
-	MaxConcurrentJobs     int    `toml:"max_concurrent_jobs"`     // Max parallel jobs for this client
-	TimeoutSeconds        int    `toml:"timeout_seconds"`         // Override global timeout
+	Name         string `toml:"name"`
+	ScheduleTime string `toml:"schedule_time"` // e.g. "4:40 pm" — local time when client starts
 }
 
 type BackupStatus struct {
