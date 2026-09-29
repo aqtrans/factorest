@@ -141,6 +141,9 @@ func isItTimeToBackup(clientID string) bool {
 		return false
 	}
 	slot = backupSlot{ClientID: clientID, StartedAt: time.Now(), LastSeen: time.Now()}
+	// Mark as triggered immediately so a failed "running" report
+	// cannot cause the trigger to fire again on the next heartbeat.
+	scheduledTriggered[clientID] = today
 	return true
 }
 
@@ -256,11 +259,15 @@ func serveBackupStatus(w http.ResponseWriter, r *http.Request) {
 		if slot.ClientID == clientID {
 			slog.Info("backup completed", slog.String("client_id", clientID), slog.String("job", req.Job))
 			slot = backupSlot{}
+			// Safety net: clear pending in case the "running" report was lost
+			pendingBackup[clientID] = false
 		}
 	case "failed":
 		if slot.ClientID == clientID {
 			slog.Warn("backup failed", slog.String("client_id", clientID), slog.String("job", req.Job))
 			slot = backupSlot{}
+			// Safety net: clear pending in case the "running" report was lost
+			pendingBackup[clientID] = false
 		}
 	default:
 		heartbeatMu.Unlock()
@@ -287,6 +294,9 @@ func startBackupTimeoutMonitor() {
 				slog.String("client_id", slot.ClientID),
 				slog.String("last_seen", slot.LastSeen.Format(time.RFC3339)),
 			)
+			// Clear pending so a stale slot cannot cause the client to
+			// immediately re-trigger a backup on its next heartbeat.
+			pendingBackup[slot.ClientID] = false
 			slot = backupSlot{}
 		}
 		heartbeatMu.Unlock()

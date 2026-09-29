@@ -39,11 +39,42 @@ func doRequest(method, url string, body io.Reader) (*http.Response, error) {
 	return httpClient.Do(req)
 }
 
+// preCheckRepo verifies the restic repository is reachable before starting a backup.
+// Uses a short timeout so that an unreachable repo fails fast instead of hanging.
+func preCheckRepo(ctx context.Context, g types.Config) error {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "restic", "snapshots")
+	cmd.Env = append(os.Environ(),
+		"RESTIC_REPOSITORY="+g.Repository,
+		"RESTIC_PASSWORD_FILE="+g.PasswordFile,
+	)
+	// Suppress the snapshot listing; keep stderr so connection errors are visible.
+	cmd.Stdout = io.Discard
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return fmt.Errorf("restic repository check timed out (60s): repo may be unreachable")
+		}
+		return fmt.Errorf("restic repository not reachable: %w", err)
+	}
+	return nil
+}
+
 // runResticBackup executes a restic backup with the given job configuration
 func runResticBackup(ctx context.Context, g types.Config, j types.JobConfig) error {
 	// Set a hard timeout for the backup window
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Hour)
 	defer cancel()
+
+	// Pre-check: verify the repo is reachable before starting the backup.
+	// This fails fast (≤60s) when the repo is down instead of hanging for 2h.
+	if err := preCheckRepo(ctx, g); err != nil {
+		slog.Error("pre-check failed, repo not reachable", slog.Any("err", err))
+		return err
+	}
 
 	// Grab hostname for the default tag
 	hostname, err := os.Hostname()
@@ -142,9 +173,11 @@ func runJobs(ctx context.Context, cfg types.Config) (failedJob string, err error
 
 	// Client-level pre-hooks: run once before all jobs start
 	for _, hook := range cfg.Client.PreHook {
-		if err := runHooks(ctx, "client pre-hook", hook, baseEnv...); err != nil {
-			slog.Error("error running client pre-hook", "hook", hook, slog.Any("err", err))
-			return "", err
+		if len(cfg.Client.PreHook) > 0 {
+			if err := runHooks(ctx, "client pre-hook", hook, baseEnv...); err != nil {
+				slog.Error("error running client pre-hook", "hook", hook, slog.Any("err", err))
+				return "", err
+			}
 		}
 	}
 
@@ -161,6 +194,7 @@ func runJobs(ctx context.Context, cfg types.Config) (failedJob string, err error
 			}
 		}
 
+		slog.Info("starting backup", "job", job.Name)
 		err = runResticBackup(ctx, cfg, job)
 		if err != nil {
 			slog.Error("error running backup", "job", job.Name, slog.Any("err", err))
@@ -312,7 +346,12 @@ func main() {
 			isBusy := busy
 			busyMu.Unlock()
 
-			if status := sendHeartbeat(*serverAddress, *clientID); status == "backup" && !isBusy {
+			// Skip heartbeats while a backup is in progress
+			if isBusy {
+				continue
+			}
+
+			if status := sendHeartbeat(*serverAddress, *clientID); status == "backup" {
 				busyMu.Lock()
 				busy = true
 				busyMu.Unlock()
@@ -336,6 +375,23 @@ func main() {
 
 					// Report that we're starting
 					reportBackupStatus(*serverAddress, *clientID, "running", "")
+
+					// Periodically report "running" to keep the backup slot alive
+					// since heartbeats are paused during backup
+					statusCtx, statusCancel := context.WithCancel(ctx)
+					defer statusCancel()
+					statusTicker := time.NewTicker(30 * time.Second)
+					defer statusTicker.Stop()
+					go func() {
+						for {
+							select {
+							case <-statusCtx.Done():
+								return
+							case <-statusTicker.C:
+								reportBackupStatus(*serverAddress, *clientID, "running", "")
+							}
+						}
+					}()
 
 					failedJob, err := runJobs(ctx, cfg)
 					if err != nil {
