@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"runtime/debug"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -20,7 +21,15 @@ func main() {
 
 	// Allow overriding config path
 	config := flag.String("config", "config.toml", "the path to the TOML configuration file")
+	versionFlag := flag.Bool("version", false, "server version")
 	flag.Parse()
+
+	if *versionFlag {
+		if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
+			slog.Info("Version", "info", info.Main.Version)
+		}
+		return
+	}
 
 	configPath = *config
 

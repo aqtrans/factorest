@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"runtime/debug"
 	"sync"
 	"syscall"
 	"time"
@@ -259,8 +260,15 @@ func main() {
 	serverAddress := flag.String("server", "http://localhost:8080", "address of the server")
 	heartbeatSeconds := flag.Int("heartbeat", 10, "seconds between heartbeats")
 	authToken = *flag.String("token", "", "shared auth token (matches server auth_token)")
-
+	versionFlag := flag.Bool("version", false, "client version")
 	flag.Parse()
+
+	if *versionFlag {
+		if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
+			slog.Info("Version", "info", info.Main.Version)
+		}
+		return
+	}
 
 	// Enable debug logging:
 	slog.SetLogLoggerLevel(slog.LevelDebug)
