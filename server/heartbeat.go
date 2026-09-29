@@ -140,7 +140,6 @@ func isItTimeToBackup(clientID string) bool {
 	if slot.ClientID != "" {
 		return false
 	}
-	scheduledTriggered[clientID] = today
 	slot = backupSlot{ClientID: clientID, StartedAt: time.Now(), LastSeen: time.Now()}
 	return true
 }
@@ -159,7 +158,6 @@ func serveClientStatus(w http.ResponseWriter, r *http.Request) {
 	_, seenBefore := clientLastSeen[clientID]
 	clientLastSeen[clientID] = time.Now()
 	pending := pendingBackup[clientID]
-	pendingBackup[clientID] = false
 
 	// If this client is the one holding the slot, update LastSeen
 	if slot.ClientID == clientID {
@@ -245,6 +243,8 @@ func serveBackupStatus(w http.ResponseWriter, r *http.Request) {
 			if req.Job != "" {
 				slot.Job = req.Job
 			}
+			pendingBackup[clientID] = false
+			scheduledTriggered[clientID] = time.Now().Format("2006-01-02")
 		} else {
 			// Client reports running but doesn't hold the slot — ignore
 			heartbeatMu.Unlock()
