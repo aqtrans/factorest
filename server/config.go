@@ -17,20 +17,8 @@ type configStore struct {
 	cfg *types.Config
 }
 
-func loadConfig() (*types.Config, error) {
-	var config types.Config
-
-	// Read TOML config file and unmarshal directly into our struct
-	// TODO: Figure out the best way to integrate this
-	configBytes, err := os.ReadFile(configPath)
-	if err == nil && len(configBytes) > 0 {
-		err = toml.Unmarshal(configBytes, &config)
-		return &config, err
-	}
-
-	return &config, nil
-}
-
+// Get reloads the config from disk and updates the store.
+// On failure, the last known good config is retained.
 func (s *configStore) Get() error {
 	var config types.Config
 
@@ -49,29 +37,4 @@ func (s *configStore) Get() error {
 	s.cfg = &config
 	s.Unlock()
 	return nil
-}
-
-// contains is a helper to check if a string contains a substring (case-insensitive)
-func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
-
-func toClientConfig(jobs []types.JobConfig) types.JobConfig {
-	if len(jobs) > 0 {
-		return jobs[0]
-	}
-
-	// Fallback: only use defaults if no config file exists
-	cfg, _ := loadConfig()
-	if cfg != nil && len(cfg.Jobs) > 0 {
-		return cfg.Jobs[0]
-	}
-
-	// Absolute last resort default
-	return types.JobConfig{Name: "unknown-job", Files: []string{""}}
 }

@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
@@ -46,15 +45,17 @@ func main() {
 				if !ok {
 					return
 				}
-				log.Printf("Event received: %s", event)
+				slog.Debug("fsnotify event", slog.Any("event", event))
 
 				// Evaluate specific operation types
 				if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
 					slog.Info("config file modified")
 					err = cfgStore.Get()
 					if err != nil {
-						slog.Error("error loading config", slog.Any("cfg", err))
-						os.Exit(1)
+						// Log the error but keep the last known good config.
+						// Do NOT exit — a transient file issue (editor save,
+						// partial write) should not kill the server.
+						slog.Error("error reloading config, keeping last known good config", slog.Any("err", err))
 					}
 				}
 
@@ -62,7 +63,7 @@ func main() {
 				if !ok {
 					return
 				}
-				slog.Error("Error:", slog.Any("cfg", err))
+				slog.Error("fsnotify error", slog.Any("err", err))
 			}
 		}
 	}()
@@ -76,7 +77,6 @@ func main() {
 	// Enable debug logging:
 	slog.SetLogLoggerLevel(slog.LevelDebug)
 
-	// slog.Debug("config loaded", slog.Any("cfg", cfg))
 	slog.Debug("Password file:", slog.String("pwfile", cfgStore.cfg.PasswordFile))
 	slog.Debug("Repository:", slog.String("repo", cfgStore.cfg.Repository))
 	slog.Debug("Debug mode:", slog.Bool("debug", cfgStore.cfg.Debug))
@@ -84,9 +84,13 @@ func main() {
 
 	slog.Info("Server starting on " + cfgStore.cfg.ListenAddress)
 
+	// Start background maintenance goroutines
+	go startBackupTimeoutMonitor()
+	go startMaintenanceLoop()
+
 	mux := http.NewServeMux()
 
-	// Fetch all jobs assigned to this client
+	// Core endpoints
 	mux.HandleFunc("GET /health", serveHealth)
 	mux.HandleFunc("GET /config.json", serveConfigJSON)
 	mux.HandleFunc("POST /reload", serveReload)
@@ -94,10 +98,12 @@ func main() {
 	// Heartbeat and client state endpoints
 	mux.HandleFunc("POST /clients/{id}/status", serveClientStatus)
 	mux.HandleFunc("POST /clients/{id}/backup", serveClientBackup)
+	mux.HandleFunc("POST /clients/{id}/backup/status", serveBackupStatus)
 	mux.HandleFunc("GET /clients", serveClients)
 	mux.HandleFunc("GET /clients/{id}", serveClient)
 
-	fmt.Printf("Endpoints:\n  GET  /health             - health check\n  GET  /config.json        - fetch backup config (JSON)\n  POST /clients/{id}/status - client heartbeat\n  POST /clients/{id}/backup - manual backup trigger\n  GET  /clients            - live client list\n  GET  /clients/{id}       - single client view\n")
+	slog.Info("Endpoints:",
+		slog.String("endpoints", "GET /health, GET /config.json, POST /reload, POST /clients/{id}/status, POST /clients/{id}/backup, POST /clients/{id}/backup/status, GET /clients, GET /clients/{id}"))
 
 	err = http.ListenAndServe(cfgStore.cfg.ListenAddress, mux)
 	if err != nil {

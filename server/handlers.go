@@ -14,12 +14,17 @@ func serveHealth(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, `{"status":"ok","server_time":%d}`, now.Unix())
 }
 
-// serveConfig returns global config and
+// serveConfig returns the global config filtered for the requesting client.
+// It reads from the cached cfgStore (no file I/O per request).
 func serveConfig(r *http.Request) (types.Config, error) {
-	config, err := loadConfig()
-	if err != nil {
-		return types.Config{}, fmt.Errorf("failed to load config: %w", err)
+	cfgStore.RLock()
+	if cfgStore.cfg == nil {
+		cfgStore.RUnlock()
+		return types.Config{}, fmt.Errorf("config not loaded")
 	}
+	// Work on a local copy to avoid mutating shared state
+	config := *cfgStore.cfg
+	cfgStore.RUnlock()
 
 	// Extract client ID from header or query parameter
 	clientId := r.Header.Get("X-Client-ID")
@@ -51,7 +56,7 @@ func serveConfig(r *http.Request) (types.Config, error) {
 		}
 	}
 
-	return *config, nil
+	return config, nil
 }
 
 // isClientAllowedToJob checks if a client_id can access this job
@@ -68,62 +73,40 @@ func isClientAllowedToJob(job types.JobConfig, clientId string) bool {
 	return false
 }
 
-// serveConfigJSON returns JSON-encoded list of jobs for the client
+// serveConfigJSON returns JSON-encoded config for the client
 func serveConfigJSON(w http.ResponseWriter, r *http.Request) {
-	jobs, err := serveConfig(r)
+	config, err := serveConfig(r)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("error: %v", err), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(jobs)
+	json.NewEncoder(w).Encode(config)
 }
 
-// serveReload - manually trigger config reload (for testing or CLI tools)
+// serveReload manually triggers a config reload (for testing or CLI tools)
 func serveReload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	// Trigger a reload
-	config, err := loadConfig()
-	if err != nil {
+	// Trigger a reload via the store (which manages its own locking)
+	if err := cfgStore.Get(); err != nil {
 		http.Error(w, fmt.Sprintf("failed to reload config: %v", err), http.StatusInternalServerError)
 		return
 	}
+
+	cfgStore.RLock()
+	jobs := len(cfgStore.cfg.Jobs)
+	clients := len(cfgStore.cfg.Clients)
+	cfgStore.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":  "reloaded",
 		"message": "Config reloaded successfully",
-		"jobs":    len(config.Jobs),
-		"clients": len(config.Clients),
+		"jobs":    jobs,
+		"clients": clients,
 	})
-}
-
-// serveProgress returns a placeholder backup status with the client ID
-func serveProgress(w http.ResponseWriter, r *http.Request) (types.BackupStatus, error) {
-	config, err := loadConfig()
-	if err != nil {
-		return types.BackupStatus{Job: "default-job", Progress: 0, Status: "idle", Message: ""}, nil
-	}
-
-	status := types.BackupStatus{
-		Job:      config.Jobs[0].Name,
-		Progress: 0,
-		Status:   "idle",
-		Message:  "",
-	}
-
-	// Add client ID if present
-	clientId := r.Header.Get("X-Client-ID")
-	if clientId == "" {
-		clientId = r.URL.Query().Get("client_id")
-	}
-	status.ClientId = clientId
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(status)
-	return status, nil
 }

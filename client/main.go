@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"factorest/types"
@@ -12,14 +13,20 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 )
 
+// httpClient is a shared HTTP client with a reasonable timeout.
+var httpClient = &http.Client{
+	Timeout: 15 * time.Second,
+}
+
 // runResticBackup executes a restic backup with the given job configuration
-func runResticBackup(g types.Config, j types.JobConfig) error {
+func runResticBackup(ctx context.Context, g types.Config, j types.JobConfig) error {
 	// Set a hard timeout for the backup window
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Hour)
 	defer cancel()
 
 	// Grab hostname for the default tag
@@ -70,16 +77,16 @@ func runResticBackup(g types.Config, j types.JobConfig) error {
 		return fmt.Errorf("restic backup failed: %w", err)
 	}
 
-	slog.Info("Backup completed successfully!")
+	slog.Info("job successful", "job", j.Name)
 
 	return nil
 }
 
 // runHooks executes a hook command with a descriptive label for logging.
 // extraEnv are additional KEY=VALUE environment variables available to the hook.
-func runHooks(label, c string, extraEnv ...string) error {
+func runHooks(ctx context.Context, label, c string, extraEnv ...string) error {
 	// Set a hard timeout for the hook execution
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Hour)
 	defer cancel()
 
 	slog.Info("Executing " + label + ": " + c)
@@ -100,12 +107,14 @@ func runHooks(label, c string, extraEnv ...string) error {
 		return fmt.Errorf("hook failed (%s): %w", label, err)
 	}
 
-	slog.Info("Hook completed successfully: " + label)
+	slog.Info("hook completed successfully", "label", label)
 
 	return nil
 }
 
-func runJobs(cfg types.Config) error {
+// runJobs executes all assigned jobs with their hooks.
+// Returns the name of the failed job if any job fails, or "" on success.
+func runJobs(ctx context.Context, cfg types.Config) (failedJob string, err error) {
 	clientID := cfg.Client.Name
 	jobCount := len(cfg.Jobs)
 
@@ -117,80 +126,58 @@ func runJobs(cfg types.Config) error {
 
 	// Client-level pre-hooks: run once before all jobs start
 	for _, hook := range cfg.Client.PreHook {
-		if err := runHooks("client pre-hook", hook, baseEnv...); err != nil {
-			slog.Error("Error running client pre-hook", slog.Any("err", err))
-			return err
+		if err := runHooks(ctx, "client pre-hook", hook, baseEnv...); err != nil {
+			slog.Error("error running client pre-hook", "hook", hook, slog.Any("err", err))
+			return "", err
 		}
 	}
 
-	failedJob := ""
 	for _, job := range cfg.Jobs {
 		var err error
 
 		if len(job.PreHook) > 0 {
 			for _, preHook := range job.PreHook {
-				err = runHooks("job pre-hook ("+job.Name+")", preHook)
+				err = runHooks(ctx, "job pre-hook ("+job.Name+")", preHook, baseEnv...)
 				if err != nil {
-					slog.Error("Error running preHook", slog.Any("err", err))
-					failedJob = job.Name
-					break
+					slog.Error("error running preHook", "job", job.Name, "hook", preHook, slog.Any("err", err))
+					return job.Name, err
 				}
 			}
 		}
-		if failedJob != "" {
-			break
-		}
 
-		err = runResticBackup(cfg, job)
+		err = runResticBackup(ctx, cfg, job)
 		if err != nil {
-			slog.Error("Error running backup", slog.Any("err", err))
-			failedJob = job.Name
-			break
+			slog.Error("error running backup", "job", job.Name, slog.Any("err", err))
+			return job.Name, err
 		}
 
 		if len(job.PostHook) > 0 {
 			for _, postHook := range job.PostHook {
-				err = runHooks("job post-hook ("+job.Name+")", postHook)
+				err = runHooks(ctx, "job post-hook ("+job.Name+")", postHook, baseEnv...)
 				if err != nil {
-					slog.Error("Error running postHook", slog.Any("err", err))
-					failedJob = job.Name
-					break
+					slog.Error("error running postHook", "job", job.Name, slog.Any("err", err))
+					return job.Name, err
 				}
 			}
 		}
-		if failedJob != "" {
-			break
-		}
-	}
-
-	if failedJob != "" {
-		// Client-level failure hooks: notify that the run failed
-		failEnv := append(baseEnv, "FAILED_JOBS="+failedJob)
-		for _, hook := range cfg.Client.OnFailure {
-			if err := runHooks("client onFailure-hook", hook, failEnv...); err != nil {
-				slog.Error("Error running onFailure hook", slog.Any("err", err))
-			}
-		}
-		return fmt.Errorf("backup run failed")
 	}
 
 	// Client-level post-hooks: run once after all jobs succeed
 	for _, hook := range cfg.Client.PostHook {
-		if err := runHooks("client post-hook", hook, baseEnv...); err != nil {
-			slog.Error("Error running client post-hook", slog.Any("err", err))
-			return err
+		if err := runHooks(ctx, "client post-hook", hook, baseEnv...); err != nil {
+			slog.Error("error running client post-hook", "hook", hook, slog.Any("err", err))
+			return "", err
 		}
 	}
 
-	return nil
+	return "", nil
 }
 
+// getConfig fetches job config from the server.
 func getConfig(serverAddress, clientID string) (types.Config, error) {
-
-	// Fetch job config from server - all values come from server response
 	config := types.Config{}
 
-	resp, err := http.Get(fmt.Sprintf("%s/config.json?client_id=%s", serverAddress, clientID))
+	resp, err := httpClient.Get(fmt.Sprintf("%s/config.json?client_id=%s", serverAddress, clientID))
 	if err != nil {
 		return config, fmt.Errorf("failed to fetch config: %w", err)
 	}
@@ -201,9 +188,11 @@ func getConfig(serverAddress, clientID string) (types.Config, error) {
 		return config, fmt.Errorf("config error: %s - %s", resp.Status, string(body))
 	}
 
-	json.NewDecoder(resp.Body).Decode(&config)
+	if err := json.NewDecoder(resp.Body).Decode(&config); err != nil {
+		return config, fmt.Errorf("failed to decode config: %w", err)
+	}
 
-	fmt.Printf("Client [%s] fetched job: %s\n", clientID, config.Jobs)
+	slog.Info("fetched config", slog.String("client_id", clientID), slog.Int("jobs", len(config.Jobs)))
 	return config, nil
 }
 
@@ -211,7 +200,7 @@ func getConfig(serverAddress, clientID string) (types.Config, error) {
 // from the response. The server responds with status "backup" when a
 // backup should be started; "ok" otherwise.
 func sendHeartbeat(serverAddress, clientID string) string {
-	resp, err := http.Post(serverAddress+"/clients/"+clientID+"/status", "application/json", nil)
+	resp, err := httpClient.Post(serverAddress+"/clients/"+clientID+"/status", "application/json", nil)
 	if err != nil {
 		slog.Error("heartbeat failed", slog.Any("err", err))
 		return "error"
@@ -229,6 +218,26 @@ func sendHeartbeat(serverAddress, clientID string) string {
 	return heartbeat.Status
 }
 
+// reportBackupStatus sends an explicit backup state report to the server.
+// status is "running", "completed", or "failed". job is the job name (optional).
+func reportBackupStatus(serverAddress, clientID, status, job string) {
+	body, _ := json.Marshal(map[string]string{
+		"status": status,
+		"job":    job,
+	})
+	resp, err := httpClient.Post(serverAddress+"/clients/"+clientID+"/backup/status", "application/json", bytes.NewReader(body))
+	if err != nil {
+		slog.Error("failed to report backup status", slog.String("status", status), slog.Any("err", err))
+		return
+	}
+	defer resp.Body.Close()
+	slog.Debug("backup status reported", slog.String("status", status), slog.String("job", job))
+	// If job is blank, this should be a client backup, so log as info
+	if job == "" {
+		slog.Info("client backup", "status", status)
+	}
+}
+
 func main() {
 
 	clientID := flag.String("client-id", "", "the client name to present to the server")
@@ -237,23 +246,12 @@ func main() {
 
 	flag.Parse()
 
-	/* 	cfg, err := getConfig(*serverAddress, *clientID)
-	   	if err != nil {
-	   		slog.Error("error getting config", slog.Any("err", err))
-	   		os.Exit(1)
-	   	}
-	*/
-
 	// Enable debug logging:
 	slog.SetLogLoggerLevel(slog.LevelDebug)
 
-	// slog.Debug("config loaded", slog.Any("cfg", cfg))
-	// slog.Debug("Password file:", slog.String("pwfile", cfg.PasswordFile))
-	// slog.Debug("Repository:", slog.String("repo", cfg.Repository))
-	// slog.Debug("Debug mode:", slog.Bool("debug", cfg.Debug))
-	// slog.Debug("Jobs loaded:", slog.Int("count", len(cfg.Jobs)))
-
-	// slog.Debug("Jobs config:", slog.Any("jobs", cfg.Jobs))
+	// Context for graceful shutdown
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	done := make(chan os.Signal, 1)
 	signal.Notify(done, syscall.SIGINT, syscall.SIGTERM)
@@ -274,28 +272,65 @@ func main() {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	// busy tracks whether a backup run is in progress, so triggers while
-	// jobs are running don't start overlapping runs.
+	// busyMu guards the busy flag to prevent data races between
+	// the main loop and the backup goroutine.
+	var busyMu sync.Mutex
 	busy := false
 
 	for {
 		select {
 		case <-done:
 			slog.Info("Shutting down.")
+			cancel()
 			return
 		case <-ticker.C:
-			if status := sendHeartbeat(*serverAddress, *clientID); status == "backup" && !busy {
+			busyMu.Lock()
+			isBusy := busy
+			busyMu.Unlock()
+
+			if status := sendHeartbeat(*serverAddress, *clientID); status == "backup" && !isBusy {
+				busyMu.Lock()
 				busy = true
+				busyMu.Unlock()
+
 				// Fetch config from the server
 				cfg, err := getConfig(*serverAddress, *clientID)
 				if err != nil {
 					slog.Error("error getting config from server", slog.String("server", *serverAddress), slog.Any("err", err))
-					os.Exit(1)
+					busyMu.Lock()
+					busy = false
+					busyMu.Unlock()
+					continue
 				}
+
 				go func() {
-					defer func() { busy = false }()
-					if err := runJobs(cfg); err != nil {
+					defer func() {
+						busyMu.Lock()
+						busy = false
+						busyMu.Unlock()
+					}()
+
+					// Report that we're starting
+					reportBackupStatus(*serverAddress, *clientID, "running", "")
+
+					failedJob, err := runJobs(ctx, cfg)
+					if err != nil {
 						slog.Error("backup run failed", slog.Any("err", err))
+						reportBackupStatus(*serverAddress, *clientID, "failed", failedJob)
+
+						// Client-level failure hooks
+						failEnv := []string{
+							"CLIENT_ID=" + cfg.Client.Name,
+							"JOB_COUNT=" + fmt.Sprintf("%d", len(cfg.Jobs)),
+							"FAILED_JOBS=" + failedJob,
+						}
+						for _, hook := range cfg.Client.OnFailure {
+							if hookErr := runHooks(ctx, "client onFailure-hook", hook, failEnv...); hookErr != nil {
+								slog.Error("error running onFailure hook", slog.Any("err", hookErr))
+							}
+						}
+					} else {
+						reportBackupStatus(*serverAddress, *clientID, "completed", "")
 					}
 				}()
 			}
