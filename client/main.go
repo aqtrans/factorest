@@ -23,6 +23,21 @@ var httpClient = &http.Client{
 	Timeout: 15 * time.Second,
 }
 
+// authToken is the shared secret sent as X-Auth-Token on every request.
+var authToken string
+
+// doRequest performs an HTTP request with the auth header attached.
+func doRequest(method, url string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	if authToken != "" {
+		req.Header.Set("X-Auth-Token", authToken)
+	}
+	return httpClient.Do(req)
+}
+
 // runResticBackup executes a restic backup with the given job configuration
 func runResticBackup(ctx context.Context, g types.Config, j types.JobConfig) error {
 	// Set a hard timeout for the backup window
@@ -177,7 +192,7 @@ func runJobs(ctx context.Context, cfg types.Config) (failedJob string, err error
 func getConfig(serverAddress, clientID string) (types.Config, error) {
 	config := types.Config{}
 
-	resp, err := httpClient.Get(fmt.Sprintf("%s/config.json?client_id=%s", serverAddress, clientID))
+	resp, err := doRequest("GET", fmt.Sprintf("%s/config.json?client_id=%s", serverAddress, clientID), nil)
 	if err != nil {
 		return config, fmt.Errorf("failed to fetch config: %w", err)
 	}
@@ -200,7 +215,7 @@ func getConfig(serverAddress, clientID string) (types.Config, error) {
 // from the response. The server responds with status "backup" when a
 // backup should be started; "ok" otherwise.
 func sendHeartbeat(serverAddress, clientID string) string {
-	resp, err := httpClient.Post(serverAddress+"/clients/"+clientID+"/status", "application/json", nil)
+	resp, err := doRequest("POST", serverAddress+"/clients/"+clientID+"/status", nil)
 	if err != nil {
 		slog.Error("heartbeat failed", slog.Any("err", err))
 		return "error"
@@ -225,7 +240,7 @@ func reportBackupStatus(serverAddress, clientID, status, job string) {
 		"status": status,
 		"job":    job,
 	})
-	resp, err := httpClient.Post(serverAddress+"/clients/"+clientID+"/backup/status", "application/json", bytes.NewReader(body))
+	resp, err := doRequest("POST", serverAddress+"/clients/"+clientID+"/backup/status", bytes.NewReader(body))
 	if err != nil {
 		slog.Error("failed to report backup status", slog.String("status", status), slog.Any("err", err))
 		return
@@ -243,6 +258,7 @@ func main() {
 	clientID := flag.String("client-id", "", "the client name to present to the server")
 	serverAddress := flag.String("server", "http://localhost:8080", "address of the server")
 	heartbeatSeconds := flag.Int("heartbeat", 10, "seconds between heartbeats")
+	authToken = *flag.String("token", "", "shared auth token (matches server auth_token)")
 
 	flag.Parse()
 

@@ -8,6 +8,7 @@ type Config struct {
 	Debug         bool           `toml:"debug"`
 	DryRun        bool           `toml:"dry-run"`
 	ListenAddress string         `toml:"listen_address"`
+	AuthToken     string         `toml:"auth_token"`
 	Jobs          []JobConfig    `toml:"jobs"`
 	Clients       []ClientConfig `toml:"clients"`
 	Client        ClientConfig   `toml:"-"` // populated by server per-request, not from TOML

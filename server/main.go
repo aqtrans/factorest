@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"flag"
 	"log"
 	"log/slog"
@@ -105,9 +106,39 @@ func main() {
 	slog.Info("Endpoints:",
 		slog.String("endpoints", "GET /health, GET /config.json, POST /reload, POST /clients/{id}/status, POST /clients/{id}/backup, POST /clients/{id}/backup/status, GET /clients, GET /clients/{id}"))
 
-	err = http.ListenAndServe(cfgStore.cfg.ListenAddress, mux)
+	err = http.ListenAndServe(cfgStore.cfg.ListenAddress, requireAuth(mux))
 	if err != nil {
 		slog.Error("HTTP listen error", slog.Any("http", err))
 		os.Exit(1)
 	}
+}
+
+// requireAuth wraps an http.Handler with token authentication.
+// If the configured AuthToken is empty, authentication is disabled and
+// all requests pass through. Otherwise, every request must include
+// an X-Auth-Token header matching the configured token.
+func requireAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cfgStore.RLock()
+		token := cfgStore.cfg.AuthToken
+		cfgStore.RUnlock()
+
+		if token == "" {
+			// Auth disabled — pass through
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		provided := r.Header.Get("X-Auth-Token")
+		// Constant-time comparison to prevent timing attacks
+		match := subtle.ConstantTimeCompare([]byte(provided), []byte(token))
+		if match != 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":"unauthorized"}`))
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
