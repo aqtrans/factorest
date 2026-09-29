@@ -242,12 +242,16 @@ func serveBackupStatus(w http.ResponseWriter, r *http.Request) {
 	case "running":
 		// Confirm the slot is held by this client and update LastSeen
 		if slot.ClientID == clientID {
-			slot.LastSeen = time.Now()
+			now := time.Now()
+			slot.LastSeen = now
+			// Keep the client "online" in the dashboard while it is
+			// actively backing up (heartbeats are paused during a backup).
+			clientLastSeen[clientID] = now
 			if req.Job != "" {
 				slot.Job = req.Job
 			}
 			pendingBackup[clientID] = false
-			scheduledTriggered[clientID] = time.Now().Format("2006-01-02")
+			scheduledTriggered[clientID] = now.Format("2006-01-02")
 		} else {
 			// Client reports running but doesn't hold the slot — ignore
 			heartbeatMu.Unlock()
@@ -310,15 +314,55 @@ type clientView struct {
 	LastSeen     int64  `json:"last_seen,omitempty"`
 	ActiveJob    string `json:"active_job,omitempty"`
 	InBackupSlot bool   `json:"in_backup_slot,omitempty"`
+	ScheduleTime string `json:"schedule_time,omitempty"`
 }
 
-// serveClients lists the server's live view of all clients: GET /clients
+// onlineThreshold is how recent a heartbeat must be for a client to be
+// considered online. Clients that pause heartbeats during a backup are
+// kept "online" while they hold the backup slot.
+const onlineThreshold = 60 * time.Second
+
+// clientStatus computes the live status for a client from its last-seen
+// time and whether it currently holds the backup slot.
+func clientStatus(last time.Time, seen bool, inSlot bool) string {
+	if inSlot {
+		return "online"
+	}
+	if !seen {
+		return "never seen"
+	}
+	if time.Since(last) <= onlineThreshold {
+		return "online"
+	}
+	return "offline"
+}
+
+// serveClients lists the server's live view of all configured clients,
+// merged with their live heartbeat/slot state: GET /clients
 func serveClients(w http.ResponseWriter, r *http.Request) {
+	cfgStore.RLock()
+	configured := make([]string, 0, len(cfgStore.cfg.Clients))
+	schedule := make(map[string]string, len(cfgStore.cfg.Clients))
+	for _, c := range cfgStore.cfg.Clients {
+		configured = append(configured, c.Name)
+		schedule[c.Name] = c.ScheduleTime
+	}
+	cfgStore.RUnlock()
+
 	heartbeatMu.Lock()
-	views := make([]clientView, 0, len(clientLastSeen))
-	for id, last := range clientLastSeen {
-		v := clientView{ClientID: id, Status: "online", LastSeen: last.Unix()}
-		if slot.ClientID == id {
+	views := make([]clientView, 0, len(configured))
+	for _, id := range configured {
+		last, seen := clientLastSeen[id]
+		inSlot := slot.ClientID == id
+		v := clientView{
+			ClientID:     id,
+			Status:       clientStatus(last, seen, inSlot),
+			ScheduleTime: schedule[id],
+		}
+		if seen {
+			v.LastSeen = last.Unix()
+		}
+		if inSlot {
 			v.InBackupSlot = true
 			v.ActiveJob = slot.Job
 		}

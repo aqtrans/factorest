@@ -100,9 +100,14 @@ func main() {
 
 	mux := http.NewServeMux()
 
+	// Web UI (exempt from auth — see requireAuth)
+	mux.HandleFunc("GET /", serveUI)
+	mux.HandleFunc("GET /ui", serveUI)
+
 	// Core endpoints
 	mux.HandleFunc("GET /health", serveHealth)
 	mux.HandleFunc("GET /config.json", serveConfigJSON)
+	mux.HandleFunc("GET /jobs", serveJobs)
 	mux.HandleFunc("POST /reload", serveReload)
 
 	// Heartbeat and client state endpoints
@@ -113,7 +118,7 @@ func main() {
 	mux.HandleFunc("GET /clients/{id}", serveClient)
 
 	slog.Info("Endpoints:",
-		slog.String("endpoints", "GET /health, GET /config.json, POST /reload, POST /clients/{id}/status, POST /clients/{id}/backup, POST /clients/{id}/backup/status, GET /clients, GET /clients/{id}"))
+		slog.String("endpoints", "GET /, GET /ui, GET /health, GET /config.json, GET /jobs, POST /reload, POST /clients/{id}/status, POST /clients/{id}/backup, POST /clients/{id}/backup/status, GET /clients, GET /clients/{id}"))
 
 	err = http.ListenAndServe(cfgStore.cfg.ListenAddress, requireAuth(mux))
 	if err != nil {
@@ -128,6 +133,13 @@ func main() {
 // an X-Auth-Token header matching the configured token.
 func requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The web UI shell is public: it contains no secrets, and the
+		// browser supplies the token for its data fetches.
+		if r.Method == http.MethodGet && (r.URL.Path == "/" || r.URL.Path == "/ui") {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		cfgStore.RLock()
 		token := cfgStore.cfg.AuthToken
 		cfgStore.RUnlock()

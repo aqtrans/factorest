@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Factorest — Client Dashboard</title>
+<style>
+  :root {
+    --bg: #0f1419;
+    --panel: #161d24;
+    --panel-2: #1c2530;
+    --border: #2a3540;
+    --text: #d7e0e8;
+    --muted: #8a97a3;
+    --accent: #4ea1ff;
+    --ok: #37c978;
+    --warn: #f2b134;
+    --bad: #ef5b5b;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header h1 .sub { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 8px; }
+  .controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .controls label { font-size: 13px; color: var(--muted); }
+  input[type="password"], input[type="text"] {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+    font-family: var(--mono);
+  }
+  button {
+    background: var(--accent);
+    color: #06121f;
+    border: 0;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  button.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+  main { padding: 20px; max-width: 1100px; margin: 0 auto; }
+  .statusbar {
+    display: flex;
+    gap: 18px;
+    align-items: center;
+    margin-bottom: 18px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  .dot.ok { background: var(--ok); }
+  .dot.bad { background: var(--bad); }
+  section { margin-bottom: 28px; }
+  section h2 { font-size: 15px; margin: 0 0 10px; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .badge.online { background: rgba(55,201,120,0.15); color: var(--ok); }
+  .badge.offline { background: rgba(239,91,91,0.15); color: var(--bad); }
+  .badge.never { background: rgba(138,151,163,0.15); color: var(--muted); }
+  .badge.slot { background: rgba(78,161,255,0.15); color: var(--accent); }
+  .mono { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  .empty { color: var(--muted); font-size: 13px; padding: 10px 0; }
+  .tag { display: inline-block; background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; margin: 1px 4px 1px 0; font-size: 11px; font-family: var(--mono); color: var(--muted); }
+  .public { color: var(--warn); font-size: 12px; }
+  footer { padding: 14px 20px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--border); }
+  code { font-family: var(--mono); background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Factorest <span class="sub">client connectivity & config</span></h1>
+  <div class="controls">
+    <label for="token">Auth token</label>
+    <input type="password" id="token" placeholder="X-Auth-Token (optional)" autocomplete="off">
+    <button id="save-token" class="secondary">Save</button>
+    <button id="refresh">Refresh</button>
+  </div>
+</header>
+
+<main>
+  <div class="statusbar">
+    <span><span class="dot" id="health-dot"></span>Server: <span id="health-text">checking…</span></span>
+    <span>Updated: <span id="updated">—</span></span>
+    <span>Auto-refresh: <span id="interval">5s</span></span>
+  </div>
+
+  <section>
+    <h2>Clients</h2>
+    <table id="clients-table">
+      <thead>
+        <tr>
+          <th>Client</th>
+          <th>Status</th>
+          <th>Last seen</th>
+          <th>Schedule</th>
+          <th>Backup slot</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="clients-body"></tbody>
+    </table>
+    <div class="empty" id="clients-empty" hidden>No clients configured.</div>
+  </section>
+
+  <section>
+    <h2>Jobs</h2>
+    <table id="jobs-table">
+      <thead>
+        <tr>
+          <th>Job</th>
+          <th>Tags</th>
+          <th>Files</th>
+          <th>Assigned to</th>
+        </tr>
+      </thead>
+      <tbody id="jobs-body"></tbody>
+    </table>
+    <div class="empty" id="jobs-empty" hidden>No jobs configured.</div>
+  </section>
+</main>
+
+<footer>
+  Data endpoints: <code>GET /clients</code>, <code>GET /jobs</code>, <code>GET /health</code> ·
+  Trigger: <code>POST /clients/{id}/backup</code>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  var POLL_MS = 5000;
+  var token = localStorage.getItem("factorest_token") || "";
+
+  var tokenInput = document.getElementById("token");
+  tokenInput.value = token;
+
+  function authHeaders() {
+    var h = {};
+    if (token) h["X-Auth-Token"] = token;
+    return h;
+  }
+
+  function api(path, opts) {
+    opts = opts || {};
+    opts.headers = Object.assign(authHeaders(), opts.headers || {});
+    return fetch(path, opts).then(function (r) {
+      if (!r.ok) {
+        return r.text().then(function (t) {
+          throw new Error(r.status + " " + r.statusText + (t ? " — " + t : ""));
+        });
+      }
+      return r.json();
+    });
+  }
+
+  function esc(s) {
+    s = String(s == null ? "" : s);
+    return s
+      .split("&").join("&")
+      .split("<").join("<")
+      .split(">").join(">");
+  }
+
+  function relTime(unix) {
+    if (!unix) return "—";
+    var diff = Math.max(0, Date.now() / 1000 - unix);
+    if (diff < 5) return "just now";
+    if (diff < 60) return Math.floor(diff) + "s ago";
+    if (diff < 3600) return Math.floor(diff / 60) + "m ago";
+    if (diff < 86400) return Math.floor(diff / 3600) + "h ago";
+    return Math.floor(diff / 86400) + "d ago";
+  }
+
+  function statusBadge(status) {
+    var cls = status === "online" ? "online" : status === "offline" ? "offline" : "never";
+    return '<span class="badge ' + cls + '">' + esc(status) + "</span>";
+  }
+
+  function renderClients(clients) {
+    var body = document.getElementById("clients-body");
+    var empty = document.getElementById("clients-empty");
+    body.innerHTML = "";
+    if (!clients || clients.length === 0) {
+      empty.hidden = false;
+      return;
+    }
+    empty.hidden = true;
+    clients.forEach(function (c) {
+      var tr = document.createElement("tr");
+      var slotCell = c.in_backup_slot
+        ? '<span class="badge slot">active' + (c.active_job ? " · " + esc(c.active_job) : "") + "</span>"
+        : '<span class="mono">—</span>';
+      tr.innerHTML =
+        "<td>" + esc(c.client_id) + "</td>" +
+        "<td>" + statusBadge(c.status) + "</td>" +
+        "<td>" + relTime(c.last_seen) + "</td>" +
+        "<td>" + (c.schedule_time ? esc(c.schedule_time) : '<span class="mono">—</span>') + "</td>" +
+        "<td>" + slotCell + "</td>" +
+        '<td><button class="secondary" data-id="' + esc(c.client_id) + '">Trigger backup</button></td>';
+      body.appendChild(tr);
+    });
+  }
+
+  function renderJobs(jobs) {
+    var body = document.getElementById("jobs-body");
+    var empty = document.getElementById("jobs-empty");
+    body.innerHTML = "";
+    if (!jobs || jobs.length === 0) {
+      empty.hidden = false;
+      return;
+    }
+    empty.hidden = true;
+    jobs.forEach(function (j) {
+      var tags = (j.tag || []).map(function (t) { return '<span class="tag">' + esc(t) + "</span>"; }).join("");
+      var files = (j.files || []).map(esc).join(", ");
+      var assigned = j.public
+        ? '<span class="public">public (all clients)</span>'
+        : (j.assigned_to || []).map(esc).join(", ");
+      var tr = document.createElement("tr");
+      tr.innerHTML =
+        "<td>" + esc(j.name) + "</td>" +
+        "<td>" + (tags || '<span class="mono">—</span>') + "</td>" +
+        "<td class=\"mono\">" + (files || "—") + "</td>" +
+        "<td>" + assigned + "</td>";
+      body.appendChild(tr);
+    });
+  }
+
+  function setHealth(ok, text) {
+    document.getElementById("health-dot").className = "dot " + (ok ? "ok" : "bad");
+    document.getElementById("health-text").textContent = text;
+  }
+
+  function refresh() {
+    Promise.all([
+      api("/clients").catch(function (e) { return { __error: e.message }; }),
+      api("/jobs").catch(function (e) { return { __error: e.message }; }),
+      api("/health").catch(function (e) { return { __error: e.message }; })
+    ]).then(function (res) {
+      var clients = res[0], jobs = res[1], health = res[2];
+
+      if (clients.__error) {
+        setHealth(false, "error: " + clients.__error);
+        document.getElementById("clients-body").innerHTML =
+          '<tr><td colspan="6" class="empty">Failed to load clients: ' + esc(clients.__error) + "</td></tr>";
+        document.getElementById("clients-empty").hidden = true;
+      } else {
+        renderClients(clients);
+      }
+
+      if (jobs.__error) {
+        document.getElementById("jobs-body").innerHTML =
+          '<tr><td colspan="4" class="empty">Failed to load jobs: ' + esc(jobs.__error) + "</td></tr>";
+        document.getElementById("jobs-empty").hidden = true;
+      } else {
+        renderJobs(jobs);
+      }
+
+      if (health.__error) {
+        setHealth(false, "unreachable");
+      } else {
+        setHealth(true, "ok");
+      }
+
+      document.getElementById("updated").textContent = new Date().toLocaleTimeString();
+    });
+  }
+
+  function triggerBackup(id) {
+    api("/clients/" + encodeURIComponent(id) + "/backup", { method: "POST" })
+      .then(function (r) {
+        alert("Backup queued for " + id);
+        refresh();
+      })
+      .catch(function (e) {
+        alert("Failed to queue backup for " + id + ": " + e.message);
+      });
+  }
+
+  // Wire up buttons
+  document.getElementById("save-token").addEventListener("click", function () {
+    token = tokenInput.value.trim();
+    localStorage.setItem("factorest_token", token);
+    refresh();
+  });
+  document.getElementById("refresh").addEventListener("click", refresh);
+  document.getElementById("clients-body").addEventListener("click", function (e) {
+    var btn = e.target.closest("button[data-id]");
+    if (btn) triggerBackup(btn.getAttribute("data-id"));
+  });
+
+  refresh();
+  setInterval(refresh, POLL_MS);
+})();
+</script>
+</body>
+</html>

@@ -101,19 +101,33 @@ auth_token = "your-shared-secret"
 | `postHook` | []string | Commands run once after all jobs succeed |
 | `onFailure` | []string | Commands run if any job fails |
 
+## Web UI
+
+The server ships a built-in dashboard at `GET /` (also `GET /ui`). It is a single self-contained HTML page embedded in the binary (no external assets, no build step). It polls the JSON endpoints and shows:
+
+- **Clients** — every configured client with its live status (`online` / `offline` / `never seen`), last-seen time, schedule time, and whether it holds the backup slot (with the active job). A **Trigger backup** button queues a manual backup per client.
+- **Jobs** — the configured jobs with their tags, files, and which clients they are assigned to (or "public" if unassigned).
+- **Server health** — a live indicator from `GET /health`.
+
+The page shell is public (no secrets in it). When `auth_token` is set, enter the token in the UI's "Auth token" field; the browser attaches it as `X-Auth-Token` to the data fetches (`/clients`, `/jobs`, `/health`, and the backup trigger). The token is stored in the browser's `localStorage` for convenience.
+
+Open it in a browser at `http://<server-host>:<port>/`.
+
 ## HTTP API
 
-All endpoints require the `X-Auth-Token` header when `auth_token` is configured.
+All endpoints require the `X-Auth-Token` header when `auth_token` is configured, **except** the web UI shell (`GET /` and `GET /ui`), which is public.
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET` | `/` | Web UI dashboard (also `GET /ui`) |
 | `GET` | `/health` | Health check; returns `{"status":"ok","server_time":...}` |
 | `GET` | `/config.json?client_id={id}` | Returns filtered config (jobs + client hooks) for the requesting client |
+| `GET` | `/jobs` | List all configured jobs (name, tags, files, assigned_to, public) |
 | `POST` | `/reload` | Manually reload the TOML config from disk |
 | `POST` | `/clients/{id}/status` | Heartbeat; returns `{"status":"ok"}` or `{"status":"backup"}` |
 | `POST` | `/clients/{id}/backup` | Queue a manual backup for the client |
 | `POST` | `/clients/{id}/backup/status` | Report backup state: `{"status":"running"|"completed"|"failed","job":"name"}` |
-| `GET` | `/clients` | List all known clients with last-seen, active job, and slot status |
+| `GET` | `/clients` | List all configured clients with live status, last-seen, schedule, and slot status |
 | `GET` | `/clients/{id}` | Single client view: last seen, active job, in-slot status |
 
 ## Building & Running
@@ -152,8 +166,11 @@ factorest/
 ├── server/
 │   ├── main.go        # Entry point, config loading, fsnotify watcher, HTTP server
 │   ├── config.go      # ConfigStore (TOML parsing, RWMutex-protected)
-│   ├── handlers.go    # HTTP handlers: health, config.json, reload
-│   └── heartbeat.go   # Heartbeat tracking, backup slot, scheduled triggers, client views
+│   ├── handlers.go    # HTTP handlers: health, config.json, jobs, reload
+│   ├── heartbeat.go   # Heartbeat tracking, backup slot, scheduled triggers, client views
+│   ├── ui.go          # Web UI handler (serves embedded dashboard)
+│   └── web/
+│       └── index.html # Self-contained dashboard (embedded via go:embed)
 ├── client/
 │   └── main.go        # Client daemon: heartbeat loop, config fetch, restic execution, hooks
 ├── types/

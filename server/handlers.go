@@ -84,6 +84,34 @@ func serveConfigJSON(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(config)
 }
 
+// jobView is the JSON representation of a job for the dashboard overview.
+type jobView struct {
+	Name       string   `json:"name"`
+	Tag        []string `json:"tag,omitempty"`
+	Files      []string `json:"files,omitempty"`
+	AssignedTo []string `json:"assigned_to,omitempty"`
+	Public     bool     `json:"public"`
+}
+
+// serveJobs returns the configured jobs for the dashboard overview: GET /jobs
+func serveJobs(w http.ResponseWriter, r *http.Request) {
+	cfgStore.RLock()
+	jobs := make([]jobView, 0, len(cfgStore.cfg.Jobs))
+	for _, j := range cfgStore.cfg.Jobs {
+		jobs = append(jobs, jobView{
+			Name:       j.Name,
+			Tag:        j.Tag,
+			Files:      j.Files,
+			AssignedTo: j.AssignedTo,
+			Public:     len(j.AssignedTo) == 0,
+		})
+	}
+	cfgStore.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(jobs)
+}
+
 // serveReload manually triggers a config reload (for testing or CLI tools)
 func serveReload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
