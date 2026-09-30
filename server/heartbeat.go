@@ -2,10 +2,8 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -47,52 +45,6 @@ func clientExists(clientID string) bool {
 	return false
 }
 
-// parseScheduleTime parses a time string like "4:40 pm", "10:30 am", "12:00 pm".
-// Returns the hour and minute in 24-hour format.
-func parseScheduleTime(s string) (hour, minute int, ok bool) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0, 0, false
-	}
-
-	// Split on space to separate time and am/pm
-	parts := strings.Fields(s)
-	if len(parts) != 2 {
-		return 0, 0, false
-	}
-
-	timePart := parts[0]
-	meridiem := strings.ToLower(parts[1])
-	if meridiem != "am" && meridiem != "pm" {
-		return 0, 0, false
-	}
-
-	// Split time part on colon
-	colonParts := strings.Split(timePart, ":")
-	if len(colonParts) != 2 {
-		return 0, 0, false
-	}
-
-	h, err := strconv.Atoi(colonParts[0])
-	if err != nil || h < 1 || h > 12 {
-		return 0, 0, false
-	}
-	m, err := strconv.Atoi(colonParts[1])
-	if err != nil || m < 0 || m > 59 {
-		return 0, 0, false
-	}
-
-	// Convert to 24-hour
-	if meridiem == "pm" && h != 12 {
-		h += 12
-	}
-	if meridiem == "am" && h == 12 {
-		h = 0
-	}
-
-	return h, m, true
-}
-
 // isItTimeToBackup checks whether the current time has reached or passed the
 // client's scheduled backup time, the trigger has not already fired today,
 // and no backup is currently in progress. Returns true only on the first
@@ -114,8 +66,8 @@ func isItTimeToBackup(clientID string) bool {
 		return false
 	}
 
-	hour, minute, ok := parseScheduleTime(scheduleTime)
-	if !ok {
+	schedTime, err := time.Parse("3:04 pm", strings.TrimSpace(scheduleTime))
+	if err != nil {
 		slog.Debug("failed to parse schedule_time", slog.String("client_id", clientID), slog.String("value", scheduleTime))
 		return false
 	}
@@ -124,7 +76,7 @@ func isItTimeToBackup(clientID string) bool {
 	today := now.Format("2006-01-02")
 
 	// Build today's scheduled start time
-	schedToday := time.Date(now.Year(), now.Month(), now.Day(), hour, minute, 0, 0, now.Location())
+	schedToday := time.Date(now.Year(), now.Month(), now.Day(), schedTime.Hour(), schedTime.Minute(), 0, 0, now.Location())
 
 	// Only trigger if current time has reached or passed the scheduled time
 	if now.Before(schedToday) {
@@ -211,6 +163,11 @@ func serveClientBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pendingBackup[clientID] = true
+	// Acquire the backup slot so the client's running/completed/failed
+	// reports are processed and pendingBackup is cleared (mirrors the
+	// scheduled-trigger path in isItTimeToBackup).
+	now := time.Now()
+	slot = backupSlot{ClientID: clientID, StartedAt: now, LastSeen: now}
 	heartbeatMu.Unlock()
 
 	slog.Info("manual backup queued", slog.String("client_id", clientID))
@@ -388,9 +345,8 @@ func serveClient(w http.ResponseWriter, r *http.Request) {
 	activeJob := slot.Job
 	heartbeatMu.Unlock()
 
-	view := clientView{ClientID: clientID, Status: "never seen"}
+	view := clientView{ClientID: clientID, Status: clientStatus(last, seen, inSlot)}
 	if seen {
-		view.Status = "online"
 		view.LastSeen = last.Unix()
 	}
 	if inSlot {
@@ -423,6 +379,3 @@ func startMaintenanceLoop() {
 		pruneScheduledTriggered()
 	}
 }
-
-// Ensure fmt is used (for potential future use in error messages)
-var _ = fmt.Sprintf
