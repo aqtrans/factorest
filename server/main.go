@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"runtime/debug"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -120,7 +121,14 @@ func main() {
 	slog.Info("Endpoints:",
 		slog.String("endpoints", "GET /, GET /ui, GET /health, GET /config.json, GET /jobs, POST /reload, POST /clients/{id}/status, POST /clients/{id}/backup, POST /clients/{id}/backup/status, GET /clients, GET /clients/{id}"))
 
-	err = http.ListenAndServe(cfgStore.cfg.ListenAddress, requireAuth(mux))
+	srv := &http.Server{
+		Addr:         cfgStore.cfg.ListenAddress,
+		Handler:      requireAuth(mux),
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+	err = srv.ListenAndServe()
 	if err != nil {
 		slog.Error("HTTP listen error", slog.Any("http", err))
 		os.Exit(1)
