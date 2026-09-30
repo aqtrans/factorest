@@ -4,6 +4,14 @@ Factorio-style automation for your Restic backups.
 
 The server acts as the orchestrator. A server-side TOML configuration file is served via HTTP as JSON. Clients connect to the server using a unique client ID and fetch their filtered Restic configuration. Jobs are the backups to be performed; they can be assigned to multiple clients via `assigned_to`.
 
+## AI/LLM was heavily used  
+- The initial server-client restic and config pushing logic flow was hand-crafted and tested in my local cluster  
+- A Qwen3.8 local model was used
+- Used for the "slot management" system, to ensure backups don't overlap even when manually triggered  
+- Used to mitigate some deadlocks in hot-reload of config files  
+- The entire web UI was LLM-generated  
+- Also generated the smoke-test.sh test suite, as I wanted to test the full flow  
+
 ## Architecture
 
 ```
