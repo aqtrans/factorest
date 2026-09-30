@@ -15,15 +15,15 @@ The server acts as the orchestrator. A server-side TOML configuration file is se
 ## Architecture
 
 ```
-┌─────────────────────┐         ┌──────────────────────────────┐
-│   Client Daemon     │         │       Server (Orchestrator)  │
-│                     │         │                              │
-│  - Heartbeat loop   │◄──────►│  - Heartbeat tracking        │
-│  - Config fetch     │         │  - Backup slot management    │
-│  - Restic backups   │         │  - Scheduled trigger logic   │
-│  - Hook execution   │         │  - Config hot-reload (fsnotify)
-│  - Status reports   │         │  - Auth (X-Auth-Token)       │
-└─────────────────────┘         └──────────────────────────────┘
+┌─────────────────────┐         ┌────────────────────────────────┐
+│   Client Daemon     │         │       Server (Orchestrator)    │
+│                     │         │                                │
+│  - Heartbeat loop   │◄──────► │  - Heartbeat tracking          │
+│  - Config fetch     │         │  - Backup slot management      │
+│  - Restic backups   │         │  - Scheduled trigger logic     │
+│  - Hook execution   │         │  - Config hot-reload (fsnotify)│
+│  - Status reports   │         │  - Auth (X-Auth-Token)         │
+└─────────────────────┘         └────────────────────────────────┘
 ```
 
 ## How It Works
