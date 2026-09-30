@@ -133,7 +133,7 @@ func runResticBackup(ctx context.Context, g types.Config, j types.JobConfig) err
 // extraEnv are additional KEY=VALUE environment variables available to the hook.
 func runHooks(ctx context.Context, label, c string, extraEnv ...string) error {
 	// Set a hard timeout for the hook execution
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Hour)
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
 	slog.Info("Executing " + label + ": " + c)
@@ -173,11 +173,9 @@ func runJobs(ctx context.Context, cfg types.Config) (failedJob string, err error
 
 	// Client-level pre-hooks: run once before all jobs start
 	for _, hook := range cfg.Client.PreHook {
-		if len(cfg.Client.PreHook) > 0 {
-			if err := runHooks(ctx, "client pre-hook", hook, baseEnv...); err != nil {
-				slog.Error("error running client pre-hook", "hook", hook, slog.Any("err", err))
-				return "", err
-			}
+		if err := runHooks(ctx, "client pre-hook", hook, baseEnv...); err != nil {
+			slog.Error("error running client pre-hook", "hook", hook, slog.Any("err", err))
+			return "", err
 		}
 	}
 
@@ -281,6 +279,9 @@ func reportBackupStatus(serverAddress, clientID, status, job string) {
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		slog.Warn("backup status report rejected by server", slog.String("status", status), slog.Int("http_status", resp.StatusCode))
+	}
 	slog.Debug("backup status reported", slog.String("status", status), slog.String("job", job))
 	// If job is blank, this should be a client backup, so log as info
 	if job == "" {
@@ -293,9 +294,13 @@ func main() {
 	clientID := flag.String("client-id", "", "the client name to present to the server")
 	serverAddress := flag.String("server", "http://localhost:8080", "address of the server")
 	heartbeatSeconds := flag.Int("heartbeat", 10, "seconds between heartbeats")
-	authToken = *flag.String("token", "", "shared auth token (matches server auth_token)")
+	token := flag.String("token", "", "shared auth token (matches server auth_token)")
 	versionFlag := flag.Bool("version", false, "client version")
 	flag.Parse()
+
+	// Assign after Parse so the flag value is actually applied.
+	// (Dereferencing before Parse would capture the default "". )
+	authToken = *token
 
 	if *versionFlag {
 		if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" {
