@@ -5,12 +5,12 @@ package types
 type Config struct {
 	PasswordFile  string         `toml:"pwfile"`
 	Repository    string         `toml:"repo"`
-	Debug         bool           `toml:"debug"`
+	Debug         bool           `toml:"debug" json:"-"`
 	DryRun        bool           `toml:"dry-run"`
-	ListenAddress string         `toml:"listen_address"`
-	AuthToken     string         `toml:"auth_token"`
+	ListenAddress string         `toml:"listen_address" json:"-"`
+	AuthToken     string         `toml:"auth_token" json:"-"`
 	Jobs          []JobConfig    `toml:"jobs"`
-	Clients       []ClientConfig `toml:"clients"`
+	Clients       []ClientConfig `toml:"clients" json:"-"`
 	Client        ClientConfig   `toml:"-"` // populated by server per-request, not from TOML
 }
 
