@@ -22,6 +22,7 @@ type backupSlot struct {
 var (
 	heartbeatMu        sync.Mutex
 	clientLastSeen     = map[string]time.Time{}
+	clientLastBackup   = map[string]time.Time{}
 	pendingBackup      = map[string]bool{}
 	scheduledTriggered = map[string]string{} // clientID -> date string (e.g. "2026-09-28")
 	slot               backupSlot            // the single active backup slot
@@ -219,6 +220,7 @@ func serveBackupStatus(w http.ResponseWriter, r *http.Request) {
 	case "completed":
 		if slot.ClientID == clientID {
 			slog.Info("backup completed", slog.String("client_id", clientID), slog.String("job", req.Job))
+			clientLastBackup[clientID] = time.Now()
 			slot = backupSlot{}
 			// Safety net: clear pending in case the "running" report was lost
 			pendingBackup[clientID] = false
@@ -269,6 +271,7 @@ type clientView struct {
 	ClientID     string `json:"client_id"`
 	Status       string `json:"status"`
 	LastSeen     int64  `json:"last_seen,omitempty"`
+	LastBackup   int64  `json:"last_backup,omitempty"`
 	ActiveJob    string `json:"active_job,omitempty"`
 	InBackupSlot bool   `json:"in_backup_slot,omitempty"`
 	ScheduleTime string `json:"schedule_time,omitempty"`
@@ -319,6 +322,9 @@ func serveClients(w http.ResponseWriter, r *http.Request) {
 		if seen {
 			v.LastSeen = last.Unix()
 		}
+		if lastBackup, ok := clientLastBackup[id]; ok {
+			v.LastBackup = lastBackup.Unix()
+		}
 		if inSlot {
 			v.InBackupSlot = true
 			v.ActiveJob = slot.Job
@@ -343,11 +349,15 @@ func serveClient(w http.ResponseWriter, r *http.Request) {
 	last, seen := clientLastSeen[clientID]
 	inSlot := slot.ClientID == clientID
 	activeJob := slot.Job
+	lastBackup, hasBackup := clientLastBackup[clientID]
 	heartbeatMu.Unlock()
 
 	view := clientView{ClientID: clientID, Status: clientStatus(last, seen, inSlot)}
 	if seen {
 		view.LastSeen = last.Unix()
+	}
+	if hasBackup {
+		view.LastBackup = lastBackup.Unix()
 	}
 	if inSlot {
 		view.InBackupSlot = true

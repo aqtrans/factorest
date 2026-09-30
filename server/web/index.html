@@ -124,6 +124,7 @@
           <th>Client</th>
           <th>Status</th>
           <th>Last seen</th>
+          <th>Last backup</th>
           <th>Schedule</th>
           <th>Backup slot</th>
           <th></th>
@@ -226,6 +227,7 @@
         "<td>" + esc(c.client_id) + "</td>" +
         "<td>" + statusBadge(c.status) + "</td>" +
         "<td>" + relTime(c.last_seen) + "</td>" +
+        "<td>" + relTime(c.last_backup) + "</td>" +
         "<td>" + (c.schedule_time ? esc(c.schedule_time) : '<span class="mono">—</span>') + "</td>" +
         "<td>" + slotCell + "</td>" +
         '<td><button class="secondary" data-id="' + esc(c.client_id) + '">Trigger backup</button></td>';
@@ -274,7 +276,7 @@
       if (clients.__error) {
         setHealth(false, "error: " + clients.__error);
         document.getElementById("clients-body").innerHTML =
-          '<tr><td colspan="6" class="empty">Failed to load clients: ' + esc(clients.__error) + "</td></tr>";
+          '<tr><td colspan="7" class="empty">Failed to load clients: ' + esc(clients.__error) + "</td></tr>";
         document.getElementById("clients-empty").hidden = true;
       } else {
         renderClients(clients);
